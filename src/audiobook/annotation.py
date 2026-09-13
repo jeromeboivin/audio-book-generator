@@ -72,6 +72,17 @@ If a Line refers to one of these speakers (by name, pronoun, title, or descripti
 that exact canonical name. Only introduce a new name if the Passage clearly introduces a
 new Speaker not in that list.
 
+The user message may begin with a block labeled "Preceding context (for tone/situation
+only):" containing the immediately preceding Passage's text, followed by a block labeled
+"Passage to annotate:" containing the actual Passage. The preceding context is there
+purely so you can judge tone correctly — dialogue read in isolation, with no idea what
+just happened, often gets the wrong emotional register (a human reading it cold would
+have the same problem). Use it ONLY to inform the `instruct` strings and gender/child
+judgments you produce; never annotate it, never include any of its text in your response
+— your `lines` output must reconstruct only the "Passage to annotate" block, exactly as
+before. If there is no such block, there was no preceding Passage (this is the first
+Passage of the Chapter) — annotate normally.
+
 Every Line must have speaker_gender ("male" or "female") and speaker_is_child (bool) filled
 in based on context, even for the Narrator (ignored for Narrator Lines downstream, but still
 required by the schema).
@@ -99,13 +110,24 @@ def short_circuit_narrator(passage_text: str) -> dict:
     }
 
 
-def _call_openai(client: OpenAI, passage_text: str, roster: list[str]) -> dict:
+def _build_user_message(passage_text: str, preceding_context: str | None) -> str:
+    if not preceding_context:
+        return passage_text
+    return (
+        f"Preceding context (for tone/situation only):\n{preceding_context}\n\n"
+        f"Passage to annotate:\n{passage_text}"
+    )
+
+
+def _call_openai(
+    client: OpenAI, passage_text: str, roster: list[str], preceding_context: str | None
+) -> dict:
     roster_str = ", ".join(roster) if roster else "(none yet)"
     resp = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT.format(roster=roster_str)},
-            {"role": "user", "content": passage_text},
+            {"role": "user", "content": _build_user_message(passage_text, preceding_context)},
         ],
         response_format={"type": "json_schema", "json_schema": SCHEMA},
     )
@@ -126,16 +148,29 @@ def _validate(data: dict) -> None:
             raise AnnotationError(f"invalid speaker_gender: {line}")
 
 
-def annotate_passage(client: OpenAI, passage_text: str, roster: list[str]) -> dict:
+def annotate_passage(
+    client: OpenAI,
+    passage_text: str,
+    roster: list[str],
+    preceding_context: str | None = None,
+) -> dict:
     """Runs the Annotation Pass (OpenAI call, retried once) for a Passage
     that's already been determined to need one (`passage.has_dialogue`,
     computed by parsing.py from the raw pre-collapse text — this function
     no longer re-derives that decision from `passage_text`). Callers that
-    don't need an Annotation Pass call `short_circuit_narrator` instead."""
+    don't need an Annotation Pass call `short_circuit_narrator` instead.
+
+    `preceding_context`: the immediately preceding Passage's text (or None
+    for the Chapter's first Passage), included so the model can judge tone
+    correctly — a line of dialogue read with no idea what just happened
+    often gets the wrong emotional register, the same problem a human cold
+    reader would have. This is situational context only: the model must not
+    annotate it, only the Passage this call is actually about (see the
+    system prompt)."""
     last_error = None
     for attempt in range(2):
         try:
-            return _call_openai(client, passage_text, roster)
+            return _call_openai(client, passage_text, roster, preceding_context)
         except Exception as e:
             last_error = e
     raise AnnotationError(

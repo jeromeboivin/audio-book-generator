@@ -133,4 +133,30 @@ ticket's Annotation Pass results are expected to be written to whatever
 per-Passage checkpoint store that ticket designs, keyed so a repeat run can
 detect "already annotated" and skip straight to synthesis.
 
+**Amendment (2026-09-13, same day) — preceding-Passage context**: the
+project owner pointed out that annotating a Passage in complete isolation
+makes it hard to judge tone correctly — a line of dialogue read with no
+idea what just happened often gets the wrong emotional register, the same
+problem a human reading it cold would have. Grilled on scope (immediately
+preceding Passage only vs. the whole chapter-so-far vs. a fixed window):
+decided on **the immediately preceding Passage only** — cheap (one extra
+Passage of tokens per call), simple, and sufficient for the immediate
+situational tone in practice.
+
+`annotate_passage` now takes an optional `preceding_context: str | None`
+(the previous Passage's text, or `None` for the Chapter's first Passage).
+When present, the user message is split into a labeled
+"Preceding context (for tone/situation only):" block followed by
+"Passage to annotate:" — the system prompt explicitly instructs the model
+to use the context only for tone/gender/child judgments and never annotate
+or reproduce it in the response. `main.py`'s Phase 1 loop tracks the
+previous Passage's text across both the skip-and-restore branch and the
+fresh-annotation branch, so this is correct even when resuming mid-chapter
+(the previous Passage's text is always known locally from the parsed
+Chapter, independent of whether this run re-annotates it or restores it
+from checkpoint). Verified with two real API calls against the same
+dialogue Passage from `tests/fixtures/synthetic_book.epub`, with and
+without context — both succeeded and produced sensibly different
+`instruct` wording. Covered by `tests/test_annotation_context.py`.
+
 Status: resolved

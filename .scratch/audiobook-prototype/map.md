@@ -88,7 +88,10 @@ out to be a full tome (see [Pick the test book](issues/02-pick-test-book.md)).
   Cast voices. **Amended 2026-09-13**: mid-quote narrator attribution
   (French *incise*) reversed from a 3-Line split back to ONE Line spoken
   entirely by the character — the 3-Line version was implemented, heard,
-  and judged bad (jarring mid-utterance voice-switch on Qwen3-TTS).
+  and judged bad (jarring mid-utterance voice-switch on Qwen3-TTS). Amended
+  again same day: each call now also includes the immediately preceding
+  Passage's text as tone/situation-only context (a Passage read in
+  isolation makes correct tone judgment hard, for the model or a human).
 - [Design Book parsing](issues/04-parsing-design.md): ebooklib + BeautifulSoup;
   a real chapter boundary is an `<h2>` chapter heading immediately followed
   by an `<h3>` title (distinguishes real chapters from Gutenberg's

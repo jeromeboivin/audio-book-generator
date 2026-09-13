@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -18,9 +19,20 @@ CAST_JSON_PATH = os.path.join(PROJECT_ROOT, "cast.json")
 CHECKPOINT_DIR = os.path.join(PROJECT_ROOT, "checkpoints")
 AUDIO_CACHE_DIR = os.path.join(PROJECT_ROOT, "audio_cache")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
-BOOK_SLUG = "fantine_tome1"
 
 DEFAULT_WORKERS = 2
+
+
+def _book_slug(book_path: str) -> str:
+    """Derives a per-Book identifier from its file path, so the checkpoint
+    manifest and chunk-audio cache are genuinely scoped per Book (ticket 07:
+    "a single JSON manifest file per Book") rather than always writing to a
+    single hardcoded slug regardless of --book — found as a real bug during
+    the first-ever full end-to-end run, against a book other than the
+    original Fantine test file."""
+    stem = os.path.splitext(os.path.basename(book_path))[0]
+    slug = re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_")
+    return slug or "book"
 
 
 def _build_narration_passages(chapter) -> list[Passage]:
@@ -86,6 +98,15 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
     """
     client = None
     all_lines: list[AnnotatedLine] = []
+    # The immediately preceding Passage's text, so the Annotation Pass has
+    # situational context to judge tone from — a dialogue Line read with no
+    # idea what just happened often gets the wrong emotional register, the
+    # same problem a human cold-reader would have. Tracked across both
+    # branches below (skip-and-restore included) so it's correct even when
+    # resuming mid-chapter: the previous Passage's text is always known
+    # locally from `passages` regardless of whether this run re-annotates
+    # it or restores it from checkpoint.
+    prev_passage_text = None
 
     for idx, passage in enumerate(passages):
         passage_text = passage.text
@@ -98,13 +119,14 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
             cast = Cast.from_snapshot(entry.get("cast", {}), cast.overrides)
             for line in entry["annotation"]["lines"]:
                 all_lines.append(_resolve_line(line, cast))
+            prev_passage_text = passage_text
             continue
 
         if passage.has_dialogue:
             if client is None:
                 client = annotation.make_client()
             print(f"Passage {idx + 1}/{n_passages}: annotating via OpenAI ({annotation.MODEL}) ...")
-            result = annotation.annotate_passage(client, passage_text, roster)
+            result = annotation.annotate_passage(client, passage_text, roster, prev_passage_text)
         else:
             result = annotation.short_circuit_narrator(passage_text)
 
@@ -114,6 +136,7 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
 
         checkpoint.set_entry(chapter_number, idx, h, result, list(roster), cast.to_snapshot())
         print(f"Passage {idx + 1}/{n_passages}: annotated ({len(result['lines'])} lines)")
+        prev_passage_text = passage_text
 
     return all_lines
 
@@ -196,8 +219,9 @@ def _phase2_synthesize_chunks(chapter_number, chunks, workers):
 def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: int = DEFAULT_WORKERS):
     overrides = Cast.load_overrides(CAST_JSON_PATH)
 
+    book_slug = _book_slug(book_path)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-    checkpoint = Checkpoint(os.path.join(CHECKPOINT_DIR, f"{BOOK_SLUG}.checkpoint.json"))
+    checkpoint = Checkpoint(os.path.join(CHECKPOINT_DIR, f"{book_slug}.checkpoint.json"))
 
     print(f"Parsing {book_path} ...")
     chapter = extract_chapter(book_path, chapter_number)
@@ -246,7 +270,7 @@ def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: in
     # ordered Line list (see chunking.py). Merges consecutive Narrator
     # Lines (even across Passage/heading boundaries) into single Chunks,
     # breaking only at real dialogue Lines.
-    chunks = chunking.build_chunks(all_lines, AUDIO_CACHE_DIR, chapter_number)
+    chunks = chunking.build_chunks(all_lines, os.path.join(AUDIO_CACHE_DIR, book_slug), chapter_number)
     print(f"Built {len(chunks)} chunk(s) from {len(all_lines)} line(s).")
 
     # Phase 2 (parallel): synthesize every Chunk whose audio isn't already
