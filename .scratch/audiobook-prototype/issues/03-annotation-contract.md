@@ -159,4 +159,41 @@ dialogue Passage from `tests/fixtures/synthetic_book.epub`, with and
 without context — both succeeded and produced sensibly different
 `instruct` wording. Covered by `tests/test_annotation_context.py`.
 
+**Correction (2026-09-13, same day) — recency window is one Line, not one
+Passage**: the project owner gave a worked example — a single Passage
+containing narration followed by three alternating dialogue turns — and
+clarified the actual principle: "if speaker B speaks after speaker A, to
+render speaker B we need to pass what speaker A told." Explicitly NOT
+"everything narrated/spoken so far in the chapter" (too much, rejected)
+and, on closer look, not quite "the whole previous Passage" either (what
+was actually implemented above) — that over-includes whenever the
+previous Passage itself had multiple Lines (its own narration-then-dialogue
+mix, say): only its LAST Line is what's actually adjacent to whatever
+comes next.
+
+Fixed: `preceding_line` (renamed from `preceding_context`) now carries just
+the immediately preceding Line's text, not the previous Passage's full
+text. `main.py`'s Phase 1 loop tracks `prev_line_text`, updated to
+`result["lines"][-1]["text"]` after every Passage (both the fresh-annotate
+and skip-and-restore branches) rather than the Passage's own source text.
+The system prompt's context-block instructions were reworded to state the
+recency principle explicitly ("a recency window, not a running history"),
+including guidance that the SAME principle governs judging tone across
+multiple Lines produced within one Passage's own breakdown (each Line vs.
+whatever immediately preceded it, not the Passage's overall arc). Verified
+with a real API call against the project owner's own worked example (a
+Laplace/Vadim exchange) — each dialogue turn's `instruct` tracked the turn
+immediately before it. Covered by `tests/test_annotation_context.py`
+(renamed) and a new `tests/test_prev_line_tracking.py`, which reproduces
+the exact bug (a multi-Line Passage's full text leaking into the next
+call) as a regression test.
+
+Note: that same verification call also surfaced a different, pre-existing,
+already-accepted risk (not something this correction changes) — GPT
+attributed the Laplace/Vadim exchange's speakers backwards relative to
+what the narration implies (misreading "il" in "finit-il par expliquer").
+Occasional misattribution like this was already an accepted POC risk (see
+this ticket's original "Failure handling" answer above); flagged here for
+visibility, not treated as a new open issue.
+
 Status: resolved

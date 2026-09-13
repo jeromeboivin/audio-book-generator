@@ -72,16 +72,22 @@ If a Line refers to one of these speakers (by name, pronoun, title, or descripti
 that exact canonical name. Only introduce a new name if the Passage clearly introduces a
 new Speaker not in that list.
 
-The user message may begin with a block labeled "Preceding context (for tone/situation
-only):" containing the immediately preceding Passage's text, followed by a block labeled
-"Passage to annotate:" containing the actual Passage. The preceding context is there
-purely so you can judge tone correctly — dialogue read in isolation, with no idea what
-just happened, often gets the wrong emotional register (a human reading it cold would
-have the same problem). Use it ONLY to inform the `instruct` strings and gender/child
-judgments you produce; never annotate it, never include any of its text in your response
-— your `lines` output must reconstruct only the "Passage to annotate" block, exactly as
-before. If there is no such block, there was no preceding Passage (this is the first
-Passage of the Chapter) — annotate normally.
+The user message may begin with a block labeled "Immediately preceding line (for
+tone/situation only):" containing the single Line that came right before this Passage
+(whatever was last said or narrated — from earlier in the Chapter, not necessarily this
+Passage), followed by a block labeled "Passage to annotate:" containing the actual
+Passage. This is a recency window, not a running history: if speaker B speaks right
+after speaker A, judging B's tone needs what A just said, not the whole chapter so far.
+Use it ONLY to inform the `instruct` strings and gender/child judgments you produce;
+never annotate it, never include any of its text in your response — your `lines` output
+must reconstruct only the "Passage to annotate" block, exactly as before. If there is no
+such block, this is the Chapter's first Passage — annotate normally.
+
+The SAME recency principle applies within this Passage's own breakdown, if it contains
+more than one Line: judge each Line's tone primarily against whatever came immediately
+before it (the "Immediately preceding line" block for the first Line in your output; the
+previous Line in your OWN output for every Line after that) — not against the Passage's
+overall narrative arc or anything further back.
 
 Every Line must have speaker_gender ("male" or "female") and speaker_is_child (bool) filled
 in based on context, even for the Narrator (ignored for Narrator Lines downstream, but still
@@ -110,24 +116,24 @@ def short_circuit_narrator(passage_text: str) -> dict:
     }
 
 
-def _build_user_message(passage_text: str, preceding_context: str | None) -> str:
-    if not preceding_context:
+def _build_user_message(passage_text: str, preceding_line: str | None) -> str:
+    if not preceding_line:
         return passage_text
     return (
-        f"Preceding context (for tone/situation only):\n{preceding_context}\n\n"
+        f"Immediately preceding line (for tone/situation only):\n{preceding_line}\n\n"
         f"Passage to annotate:\n{passage_text}"
     )
 
 
 def _call_openai(
-    client: OpenAI, passage_text: str, roster: list[str], preceding_context: str | None
+    client: OpenAI, passage_text: str, roster: list[str], preceding_line: str | None
 ) -> dict:
     roster_str = ", ".join(roster) if roster else "(none yet)"
     resp = client.chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT.format(roster=roster_str)},
-            {"role": "user", "content": _build_user_message(passage_text, preceding_context)},
+            {"role": "user", "content": _build_user_message(passage_text, preceding_line)},
         ],
         response_format={"type": "json_schema", "json_schema": SCHEMA},
     )
@@ -152,7 +158,7 @@ def annotate_passage(
     client: OpenAI,
     passage_text: str,
     roster: list[str],
-    preceding_context: str | None = None,
+    preceding_line: str | None = None,
 ) -> dict:
     """Runs the Annotation Pass (OpenAI call, retried once) for a Passage
     that's already been determined to need one (`passage.has_dialogue`,
@@ -160,17 +166,20 @@ def annotate_passage(
     no longer re-derives that decision from `passage_text`). Callers that
     don't need an Annotation Pass call `short_circuit_narrator` instead.
 
-    `preceding_context`: the immediately preceding Passage's text (or None
-    for the Chapter's first Passage), included so the model can judge tone
-    correctly — a line of dialogue read with no idea what just happened
-    often gets the wrong emotional register, the same problem a human cold
-    reader would have. This is situational context only: the model must not
+    `preceding_line`: the text of the single Line that immediately preceded
+    this Passage (or None for the Chapter's first Passage) — NOT the whole
+    previous Passage's text, and NOT everything narrated so far. A recency
+    window of exactly one: if speaker B speaks right after speaker A,
+    judging B's tone needs what A just said, not the whole chapter-so-far
+    (too much) and not necessarily the whole previous Passage either, if
+    that Passage itself had several Lines — only its last one is what's
+    actually adjacent. This is situational context only: the model must not
     annotate it, only the Passage this call is actually about (see the
     system prompt)."""
     last_error = None
     for attempt in range(2):
         try:
-            return _call_openai(client, passage_text, roster, preceding_context)
+            return _call_openai(client, passage_text, roster, preceding_line)
         except Exception as e:
             last_error = e
     raise AnnotationError(

@@ -89,9 +89,13 @@ out to be a full tome (see [Pick the test book](issues/02-pick-test-book.md)).
   (French *incise*) reversed from a 3-Line split back to ONE Line spoken
   entirely by the character — the 3-Line version was implemented, heard,
   and judged bad (jarring mid-utterance voice-switch on Qwen3-TTS). Amended
-  again same day: each call now also includes the immediately preceding
-  Passage's text as tone/situation-only context (a Passage read in
-  isolation makes correct tone judgment hard, for the model or a human).
+  again same day: each call now includes tone/situation-only context (a
+  Passage read in isolation makes correct tone judgment hard, for the
+  model or a human) — corrected same day, after a worked example, from
+  "the whole preceding Passage" down to a one-Line recency window (the
+  immediately preceding Line's text): "if speaker B speaks after speaker
+  A, render B using what A just said," not the whole previous Passage
+  (over-includes if it had several Lines) and not the whole chapter so far.
 - [Design Book parsing](issues/04-parsing-design.md): ebooklib + BeautifulSoup;
   a real chapter boundary is an `<h2>` chapter heading immediately followed
   by an `<h3>` title (distinguishes real chapters from Gutenberg's

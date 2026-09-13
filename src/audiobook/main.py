@@ -98,15 +98,16 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
     """
     client = None
     all_lines: list[AnnotatedLine] = []
-    # The immediately preceding Passage's text, so the Annotation Pass has
-    # situational context to judge tone from — a dialogue Line read with no
-    # idea what just happened often gets the wrong emotional register, the
-    # same problem a human cold-reader would have. Tracked across both
-    # branches below (skip-and-restore included) so it's correct even when
-    # resuming mid-chapter: the previous Passage's text is always known
-    # locally from `passages` regardless of whether this run re-annotates
-    # it or restores it from checkpoint.
-    prev_passage_text = None
+    # The immediately preceding *Line's* text (whoever spoke it — Narrator
+    # or a character), not the whole previous Passage: if speaker B speaks
+    # right after speaker A, rendering B's Line correctly needs what A just
+    # said, not the whole cumulative chapter-so-far (too much) and not
+    # necessarily the whole previous Passage either, if that Passage itself
+    # had several Lines (its own narration-then-dialogue mix, say) — only
+    # its LAST Line is what's actually adjacent to whatever comes next.
+    # Tracked across both branches below (skip-and-restore included) so
+    # it's correct even when resuming mid-chapter.
+    prev_line_text = None
 
     for idx, passage in enumerate(passages):
         passage_text = passage.text
@@ -119,14 +120,14 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
             cast = Cast.from_snapshot(entry.get("cast", {}), cast.overrides)
             for line in entry["annotation"]["lines"]:
                 all_lines.append(_resolve_line(line, cast))
-            prev_passage_text = passage_text
+            prev_line_text = entry["annotation"]["lines"][-1]["text"]
             continue
 
         if passage.has_dialogue:
             if client is None:
                 client = annotation.make_client()
             print(f"Passage {idx + 1}/{n_passages}: annotating via OpenAI ({annotation.MODEL}) ...")
-            result = annotation.annotate_passage(client, passage_text, roster, prev_passage_text)
+            result = annotation.annotate_passage(client, passage_text, roster, prev_line_text)
         else:
             result = annotation.short_circuit_narrator(passage_text)
 
@@ -136,7 +137,7 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
 
         checkpoint.set_entry(chapter_number, idx, h, result, list(roster), cast.to_snapshot())
         print(f"Passage {idx + 1}/{n_passages}: annotated ({len(result['lines'])} lines)")
-        prev_passage_text = passage_text
+        prev_line_text = result["lines"][-1]["text"]
 
     return all_lines
 
