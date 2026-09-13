@@ -70,17 +70,19 @@ Then, in the activated environment:
 export OPENAI_API_KEY=sk-...          # $env:OPENAI_API_KEY = "sk-..." on Windows
 export HF_HOME="$(pwd)/.hf"           # $env:HF_HOME = "$(Resolve-Path .hf)" on Windows
 
-python src/audiobook/main.py --chapter 1
+python src/audiobook/main.py --book /path/to/your-book.epub --chapter 1
 ```
 
 The first real run downloads both TTS models (~7 GB total) into `HF_HOME` — this only
 happens once. Pass `--gpu` to either setup script if you have a supported NVIDIA GPU and
 want the CUDA-enabled build of PyTorch instead of the default CPU-only one.
 
-A test book isn't included in the repo — grab a *Les Misérables* Tome I EPUB (public
-domain, e.g. from Project Gutenberg) and place it at
-`samples/Les misérables Tome I Fantine.epub`, or point `--book` at any EPUB with the same
-"Chapitre N" heading convention.
+Point `--book` at your own EPUB — there's no bundled test book in the repo (the default
+path, used if you omit `--book`, assumes you've placed one at
+`samples/Les misérables Tome I Fantine.epub`). For a quick trial, grab a *Les Misérables*
+Tome I EPUB (public domain, e.g. from Project Gutenberg), which matches the "Chapitre N"
+heading convention this pipeline was built against; a different book's heading structure
+may need new parsing logic (see [Scope and limitations](#scope-and-limitations)).
 
 ## Usage
 

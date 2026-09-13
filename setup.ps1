@@ -78,7 +78,7 @@ Write-Host "Next steps:"
 Write-Host "  $VenvDir\Scripts\Activate.ps1"
 Write-Host "  `$env:OPENAI_API_KEY = 'sk-...'                   # your OpenAI API key"
 Write-Host "  `$env:HF_HOME = (Resolve-Path $HfHomeDir).Path      # TTS model weights land here (~7GB, first run only)"
-Write-Host "  python src/audiobook/main.py --chapter 1"
+Write-Host "  python src/audiobook/main.py --book C:\path\to\your-book.epub --chapter 1"
 Write-Host ""
 if (-not $Gpu) {
     Write-Host "(Re-run this script with -Gpu instead if you have a supported NVIDIA GPU.)"

@@ -75,7 +75,7 @@ echo "Next steps:"
 echo "  source $VENV_DIR/bin/activate"
 echo "  export OPENAI_API_KEY=sk-...          # your OpenAI API key"
 echo "  export HF_HOME=\"\$(pwd)/$HF_HOME_DIR\"   # TTS model weights land here (~7GB, first run only)"
-echo "  python src/audiobook/main.py --chapter 1"
+echo "  python src/audiobook/main.py --book /path/to/your-book.epub --chapter 1"
 echo
 if [ "$GPU" != "1" ]; then
     echo "(Re-run this script with --gpu instead if you have a supported NVIDIA GPU.)"
