@@ -1,25 +1,64 @@
 import json
 import os
 
-NARRATOR_VOICE = "Uncle_Fu"
-NARRATOR_SPEAKER = "Narrator"
-
-SUB_POOLS = {
-    "male": ["Ryan", "Aiden"],
-    "female": ["Serena", "Vivian"],
+# The 4 fixed, configurable role-voices (see ticket 05's 2026-09-13
+# amendment: the old gender-partitioned pool + cycling design is replaced
+# entirely). Applied whenever `voices.json` is missing, or missing a given
+# key (per-key fallback, not all-or-nothing).
+DEFAULT_VOICES = {
+    "narrator": "Ryan",
+    "adult_male": "Ryan",
+    "adult_female": "Serena",
+    "child": "Vivian",
 }
 
 
+def load_voice_config(path: str) -> dict:
+    """Loads the 4 role-voice config from `voices.json`.
+
+    Missing file -> DEFAULT_VOICES, unchanged. Present file -> each of the
+    4 keys is taken from the file if present, else falls back individually
+    to its own default (a file overriding only one key, e.g.
+    `{"adult_female": "Vivian"}`, leaves the other 3 at their defaults —
+    not an all-or-nothing replacement)."""
+    if not os.path.exists(path):
+        return dict(DEFAULT_VOICES)
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f) or {}
+    return {key: data.get(key, default) for key, default in DEFAULT_VOICES.items()}
+
+
+def role_for(gender: str, is_child: bool, is_narrator: bool) -> str:
+    """Which of the 4 fixed roles (narrator/adult_male/adult_female/child)
+    a Line falls into, independent of which actual voice string ends up
+    used for it (a `cast.json` override can still pin the Line to some
+    other voice entirely — the role is about categorization/filenames,
+    not the resolved voice). Narrator takes priority over everything else
+    (a Narrator Line's `speaker_gender`/`speaker_is_child` are not
+    meaningful, per the annotation schema)."""
+    if is_narrator:
+        return "narrator"
+    if is_child:
+        return "child"
+    return "adult_male" if gender == "male" else "adult_female"
+
+
 class Cast:
-    def __init__(self, assignments: dict[str, str] | None = None, overrides: dict[str, str] | None = None):
-        self.assignments: dict[str, str] = dict(assignments or {})
+    """Stateless, pure lookup: a Speaker's Voice is a pure function of its
+    role (narrator / adult_male / adult_female / child) plus the current
+    `voice_config` and any per-character `cast.json` override — never a
+    function of assignment order or what's been handed out before. No more
+    per-run memory of past assignments is kept at all (see ticket 05's
+    2026-09-13 amendment), which is also what makes a `voices.json` change
+    take effect on an already-annotated-but-not-yet-synthesized Passage
+    without forcing any already-synthesized audio to be regenerated (see
+    ticket 07's amendment): the resolved voice for a given (role, config)
+    pair is always the same, in every Chapter, in every run, with nothing
+    to restore/snapshot across a resumed run."""
+
+    def __init__(self, voice_config: dict | None = None, overrides: dict[str, str] | None = None):
+        self.voice_config = {**DEFAULT_VOICES, **(voice_config or {})}
         self.overrides: dict[str, str] = dict(overrides or {})
-        # per sub-pool, index of the next Voice to hand out on the *next*
-        # cycle-around (so exhaustion reuses the least-recently-assigned
-        # Voice first, per ticket 05).
-        self._next_cycle_index: dict[str, int] = {"male": 0, "female": 0}
-        self._assigned_count: dict[str, int] = {"male": 0, "female": 0}
-        self.assignments.setdefault(NARRATOR_SPEAKER, NARRATOR_VOICE)
 
     @classmethod
     def load_overrides(cls, cast_json_path: str) -> dict[str, str]:
@@ -28,37 +67,14 @@ class Cast:
         with open(cast_json_path, encoding="utf-8") as f:
             return json.load(f)
 
-    def voice_for(self, speaker: str, gender: str, is_child: bool) -> str:
-        if speaker in self.assignments:
-            return self.assignments[speaker]
+    def role_for(self, gender: str, is_child: bool, is_narrator: bool = False) -> str:
+        return role_for(gender, is_child, is_narrator)
+
+    def voice_for(self, speaker: str, gender: str, is_child: bool, is_narrator: bool = False) -> str:
         if speaker in self.overrides:
-            voice = self.overrides[speaker]
-            self.assignments[speaker] = voice
-            return voice
-
-        pool_name = "female" if is_child else gender
-        pool = SUB_POOLS[pool_name]
-        count = self._assigned_count[pool_name]
-        if count < len(pool):
-            voice = pool[count]
-        else:
-            idx = self._next_cycle_index[pool_name] % len(pool)
-            voice = pool[idx]
-            self._next_cycle_index[pool_name] = idx + 1
-        self._assigned_count[pool_name] += 1
-        self.assignments[speaker] = voice
-        return voice
-
-    def to_snapshot(self) -> dict:
-        return {
-            "assignments": dict(self.assignments),
-            "next_cycle_index": dict(self._next_cycle_index),
-            "assigned_count": dict(self._assigned_count),
-        }
-
-    @classmethod
-    def from_snapshot(cls, snapshot: dict, overrides: dict[str, str]) -> "Cast":
-        cast = cls(assignments=snapshot.get("assignments"), overrides=overrides)
-        cast._next_cycle_index = dict(snapshot.get("next_cycle_index", {"male": 0, "female": 0}))
-        cast._assigned_count = dict(snapshot.get("assigned_count", {"male": 0, "female": 0}))
-        return cast
+            return self.overrides[speaker]
+        if is_narrator:
+            return self.voice_config["narrator"]
+        if is_child:
+            return self.voice_config["child"]
+        return self.voice_config["adult_male"] if gender == "male" else self.voice_config["adult_female"]

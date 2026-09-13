@@ -119,14 +119,22 @@ out to be a full tome (see [Pick the test book](issues/02-pick-test-book.md)).
   found trailing 8 of the book's other 69 chapters) being silently dropped
   with zero trace. Chapter 1 itself is unaffected (still 16 body passages,
   963 words) since it has no such headings.
-- [Design the Cast](issues/05-design-cast.md): fixed Narrator=Uncle_Fu +
-  gender-partitioned 4-Voice character pool (male: Ryan, Aiden; female:
-  Serena, Vivian) from the 9 Qwen3-TTS presets — **male/female voice
-  matching is a hard constraint, except child characters (any gender) are
-  always cast from the female sub-pool** (radio-drama convention), per
-  `speaker_gender`/`speaker_is_child` added to the annotation schema;
-  cycles within the chosen sub-pool on exhaustion; manual override via a
-  `cast.json` `{Speaker: Voice}` file that always wins over auto-casting.
+- [Design the Cast](issues/05-design-cast.md): **amended 2026-09-13** —
+  the original gender-partitioned 4-Voice pool + cycling design (fixed
+  Narrator=Uncle_Fu; male sub-pool Ryan/Aiden; female sub-pool
+  Serena/Vivian, also used for child characters of either gender) was
+  replaced with exactly **4 fixed, configurable role-voices** applied
+  uniformly, no more per-character auto-casting at all: Narrator=Ryan,
+  adult male=Ryan (same as Narrator, intentional), adult female=Serena,
+  child (either gender)=Vivian, configured via a new `voices.json` file
+  (per-key fallback to defaults if partial). `cast.json`'s per-character
+  override stays unchanged. Cast is now a stateless, pure function of
+  (role, current config) — no per-run assignment memory — which
+  incidentally makes every same-role character consistent across every
+  Chapter of a Book, for free (see the ticket amendment: the old design's
+  claimed cross-Chapter consistency wasn't actually implemented; this
+  redesign genuinely delivers it, as a side effect, not a separately-built
+  feature).
 - [Design chunking and audio assembly](issues/06-chunking-and-assembly.md):
   one TTS call per Line (empirically confirmed no truncation up to this
   Chapter's longest paragraph, 332 words); numpy-silence-padded
@@ -161,7 +169,18 @@ out to be a full tome (see [Pick the test book](issues/02-pick-test-book.md)).
   content that was already synthesized before — not engineered around, per
   this project's existing resumability-over-efficiency philosophy.
   This is what makes ticket 03's "abort the whole run on failure" decision
-  safe — nothing already done is lost.
+  safe — nothing already done is lost. **Amended again 2026-09-13**
+  (following ticket 05's Cast redesign): Cast no longer needs a persisted
+  snapshot at all — `Checkpoint.set_entry`'s `cast_snapshot` param is
+  removed, one stateless `Cast` instance is built once per run and reused.
+  Verified for real that changing `voices.json` between runs does NOT
+  force regeneration of already-synthesized Chunk audio (unaffected roles'
+  Chunks are untouched, same file/mtime; only the changed role's Chunk gets
+  a new hash/path, and the old file is simply left orphaned on disk) — see
+  the ticket amendment. Chunk audio filenames now carry a human-readable
+  role prefix (`chunk_{role}_{hash}.wav`) specifically so a category of
+  cached chunks can be found and manually deleted after a voice-config
+  change.
 
 ## Not yet specified
 

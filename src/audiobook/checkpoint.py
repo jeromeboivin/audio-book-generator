@@ -59,13 +59,18 @@ class Checkpoint:
         text_hash: str,
         annotation: dict,
         roster_snapshot: list[str],
-        cast_snapshot: dict,
     ) -> None:
+        """Cast is stateless (see ticket 05's 2026-09-13 amendment — Cast
+        is now a pure function of (role, current voice_config), never a
+        function of assignment order), so there is no Cast snapshot to
+        store anymore: `cast_snapshot` was removed entirely, not just made
+        optional. Roster snapshotting is unrelated and unchanged — it's
+        still needed for OpenAI Speaker-name-normalization continuity
+        across a resumed run."""
         self.data["passages"][self._key(chapter_number, passage_index)] = {
             "text_hash": text_hash,
             "annotation": annotation,
             "roster": roster_snapshot,
-            "cast": cast_snapshot,
         }
         self.save()
 

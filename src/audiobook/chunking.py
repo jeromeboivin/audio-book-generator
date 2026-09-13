@@ -31,18 +31,21 @@ class AnnotatedLine:
     """One fully-resolved Line, ready for chunk-building.
 
     This is whatever main.py's Phase 1 already has per Line (`is_narrator`,
-    `text`, `instruct`) plus that Line's Cast-assigned `voice`. Not
-    persisted anywhere on its own — built fresh every run (in-memory only),
-    either from a freshly-run Annotation Pass result or restored from a
-    checkpointed Passage's cached annotation, in both cases re-resolving
-    the Line's voice via Cast (deterministically — Cast's assignments are
-    themselves either freshly built or restored from the same checkpoint
-    snapshot ticket 07 already relies on)."""
+    `text`, `instruct`) plus that Line's Cast-assigned `voice` and `role`
+    (one of `"narrator"`/`"adult_male"`/`"adult_female"`/`"child"` — see
+    `cast.role_for`). Not persisted anywhere on its own — built fresh every
+    run (in-memory only), either from a freshly-run Annotation Pass result
+    or restored from a checkpointed Passage's cached annotation, in both
+    cases re-resolving the Line's voice/role via Cast (deterministically —
+    Cast is a stateless, pure function of (role, current voice_config), so
+    this is always correct regardless of run history — see ticket 05's
+    2026-09-13 amendment)."""
 
     text: str
     is_narrator: bool
     voice: str
     instruct: str | None
+    role: str
 
 
 @dataclass
@@ -50,12 +53,19 @@ class Chunk:
     """The actual unit sent to TTS synthesis: either a single dialogue
     Line, or a run of consecutive Narrator Lines (possibly spanning
     multiple Passages) merged into one call. See this module's docstring
-    and ticket 06's 2026-09-13 amendment."""
+    and ticket 06's 2026-09-13 amendment.
+
+    `role` (one of `"narrator"`/`"adult_male"`/`"adult_female"`/`"child"`)
+    is a human-readable filename prefix only (see `chunk_audio_path`) — it
+    is NOT folded into the content hash, since it's purely derived from
+    the same voice-resolution inputs already hashed (see ticket 05's
+    2026-09-13 amendment and ticket 07's matching amendment)."""
 
     text: str
     is_narrator: bool
     voice: str
     instruct: str | None
+    role: str
     audio_path: str
 
 
@@ -91,14 +101,24 @@ def chunk_audio_path(
     is_narrator: bool,
     voice: str,
     instruct: str | None,
+    role: str,
 ) -> str:
     """Content-hash-addressed path for a Chunk's audio file:
-    `audio_cache/chapter_NN/chunk_<hash>.wav`. Takes the raw fields (rather
-    than a built `Chunk`) so `build_chunks` can compute a Chunk's own path
-    before the `Chunk` object exists yet."""
+    `audio_cache/chapter_NN/chunk_<role>_<hash>.wav`. Takes the raw fields
+    (rather than a built `Chunk`) so `build_chunks` can compute a Chunk's
+    own path before the `Chunk` object exists yet.
+
+    `role` (`narrator`/`adult_male`/`adult_female`/`child`, see
+    `cast.role_for`) is added as a human-readable filename PREFIX only —
+    it is NOT a hash input (the hash is unchanged: text+voice+instruct+
+    is_narrator, exactly as before ticket 05's 2026-09-13 amendment) — so
+    the project owner can visually identify and bulk-delete a whole
+    category of cached chunk files (e.g. `chunk_adult_female_*.wav`) to
+    force their regeneration after changing that role's voice in
+    `voices.json`, without needing to know their hashes."""
     h = _chunk_hash(text, is_narrator, voice, instruct)
     d = os.path.join(audio_cache_dir, f"chapter_{chapter_number:02d}")
-    return os.path.join(d, f"chunk_{h}.wav")
+    return os.path.join(d, f"chunk_{role}_{h}.wav")
 
 
 def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_number: int) -> list[Chunk]:
@@ -130,14 +150,19 @@ def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_numbe
         if not buffer_texts:
             return
         text = " ".join(buffer_texts)
+        # Every buffered Line is a Narrator Line by construction (that's
+        # the only kind ever appended to the buffer below), so the merged
+        # Chunk's role is always "narrator" — trivially, no need to check
+        # consistency across the buffered Lines.
         chunks.append(
             Chunk(
                 text=text,
                 is_narrator=True,
                 voice=buffer_voice,
                 instruct=None,
+                role="narrator",
                 audio_path=chunk_audio_path(
-                    audio_cache_dir, chapter_number, text, True, buffer_voice, None
+                    audio_cache_dir, chapter_number, text, True, buffer_voice, None, "narrator"
                 ),
             )
         )
@@ -156,8 +181,15 @@ def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_numbe
                     is_narrator=False,
                     voice=line.voice,
                     instruct=line.instruct,
+                    role=line.role,
                     audio_path=chunk_audio_path(
-                        audio_cache_dir, chapter_number, line.text, False, line.voice, line.instruct
+                        audio_cache_dir,
+                        chapter_number,
+                        line.text,
+                        False,
+                        line.voice,
+                        line.instruct,
+                        line.role,
                     ),
                 )
             )

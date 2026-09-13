@@ -30,10 +30,21 @@ of scope — Preset Voices only.
   to the TTS engine alongside the Line's text. Narrator Lines never have one.
 - **Voice**: a concrete TTS-engine voice (one of its Preset Voices) that can
   be assigned to a Speaker.
-- **Cast**: the persistent Speaker → Voice mapping for a Book, kept
-  consistent across every Chapter. Built automatically (LLM-inferred,
-  drawn from a small pool of 4-8 Voices) with a manual override file as an
-  escape hatch.
+- **Cast** *(redesigned 2026-09-13, see [Design the
+  Cast](../.scratch/audiobook-prototype/issues/05-design-cast.md)'s
+  amendment)*: a stateless, pure lookup from a Line's **role** — one of
+  `narrator` / `adult_male` / `adult_female` / `child`, derived from
+  `is_narrator` + `speaker_gender` + `speaker_is_child` — to a Voice,
+  via 4 fixed, configurable role-voices (`voices.json`, defaults
+  Narrator=Ryan, adult male=Ryan, adult female=Serena, child=Vivian) plus
+  a `cast.json` per-Speaker-name override that always wins. Not built
+  automatically/LLM-inferred and not a per-run assignment memory (no more
+  pool, no more cycling, nothing to snapshot across a resumed run) — the
+  same role always resolves to the same Voice, in every Chapter of every
+  Book, as long as the config doesn't change. This is what actually makes
+  Cast consistent across Chapters (an earlier version of this entry
+  claimed cross-Chapter consistency the old pool/cycling design didn't
+  actually implement — see the ticket amendment for the full story).
 - **Annotation Pass**: one OpenAI call over a Passage, returning a structured
   breakdown into Lines — Narrator Lines passed through as-is, dialogue Lines
   each tagged with a Speaker and an Instruct String.

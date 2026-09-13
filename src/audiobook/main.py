@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from audiobook import annotation, assembly, chunking, synthesis
-from audiobook.cast import NARRATOR_VOICE, Cast
+from audiobook.cast import Cast, load_voice_config
 from audiobook.checkpoint import Checkpoint, hash_passage
 from audiobook.chunking import AnnotatedLine
 from audiobook.parsing import Passage, extract_chapter
@@ -16,6 +16,7 @@ from audiobook.synthesis import SynthesisJob
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_BOOK = os.path.join(PROJECT_ROOT, "samples", "Les misérables Tome I Fantine.epub")
 CAST_JSON_PATH = os.path.join(PROJECT_ROOT, "cast.json")
+VOICES_JSON_PATH = os.path.join(PROJECT_ROOT, "voices.json")
 CHECKPOINT_DIR = os.path.join(PROJECT_ROOT, "checkpoints")
 AUDIO_CACHE_DIR = os.path.join(PROJECT_ROOT, "audio_cache")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
@@ -48,40 +49,51 @@ def _build_narration_passages(chapter) -> list[Passage]:
     return [title_passage] + chapter.passages
 
 
-def _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending, overrides):
+def _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending):
+    """Only the running Speaker roster needs restoring on resume — Cast is
+    stateless now (see ticket 05's 2026-09-13 amendment), so there is no
+    Cast snapshot to reconstruct here anymore; the single `Cast` instance
+    built once at the top of `run()` is reused as-is."""
     if first_pending is None:
         idx_to_check = n_passages - 1
     else:
         idx_to_check = first_pending - 1
     if idx_to_check < 0:
-        return [], Cast(overrides=overrides)
+        return []
     entry = checkpoint.get_entry(chapter_number, idx_to_check)
     if entry is None:
-        return [], Cast(overrides=overrides)
-    roster = list(entry.get("roster", []))
-    cast = Cast.from_snapshot(entry.get("cast", {}), overrides)
-    return roster, cast
+        return []
+    return list(entry.get("roster", []))
 
 
 def _resolve_line(line: dict, cast: Cast) -> AnnotatedLine:
     """Turns one raw annotation Line dict (as returned by an Annotation
     Pass call, a Narrator short-circuit, or restored verbatim from a
     checkpointed Passage) into an AnnotatedLine ready for chunk-building —
-    i.e. resolves its Cast-assigned Voice. `cast.voice_for` is an idempotent
-    lookup for an already-assigned Speaker, so calling this on a restored
-    (already-checkpointed) Passage's lines against the Cast snapshot from
-    that same point in the run is safe and deterministic."""
-    if line["is_narrator"]:
-        return AnnotatedLine(text=line["text"], is_narrator=True, voice=NARRATOR_VOICE, instruct=None)
-    voice = cast.voice_for(line["speaker"], line["speaker_gender"], line["speaker_is_child"])
-    return AnnotatedLine(text=line["text"], is_narrator=False, voice=voice, instruct=line.get("instruct"))
+    i.e. resolves its Cast-assigned Voice and role. `cast.voice_for`/
+    `cast.role_for` are pure, stateless lookups (see ticket 05's
+    2026-09-13 amendment) applied uniformly to both Narrator and dialogue
+    Lines, so calling this on a restored (already-checkpointed) Passage's
+    lines against the same single `Cast` instance used for the whole run
+    is always correct and deterministic."""
+    voice = cast.voice_for(line["speaker"], line["speaker_gender"], line["speaker_is_child"], is_narrator=line["is_narrator"])
+    role = cast.role_for(line["speaker_gender"], line["speaker_is_child"], is_narrator=line["is_narrator"])
+    return AnnotatedLine(
+        text=line["text"],
+        is_narrator=line["is_narrator"],
+        voice=voice,
+        instruct=None if line["is_narrator"] else line.get("instruct"),
+        role=role,
+    )
 
 
 def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, checkpoint, roster, cast):
     """Sequential pass, unchanged in spirit from before the Chunk-layer
-    refactor: skip already-annotated passages (restoring roster/cast),
-    otherwise annotate-or-short-circuit + assign each Line's Voice via
-    Cast, exactly as before. Checkpoints each Passage's annotation
+    refactor: skip already-annotated passages (restoring the roster; Cast
+    needs no restoring at all anymore — see ticket 05's 2026-09-13
+    amendment, it's the single stateless instance passed in), otherwise
+    annotate-or-short-circuit + assign each Line's Voice via Cast, exactly
+    as before. Checkpoints each Passage's annotation
     immediately once it's done — no longer waits on audio synthesis, since
     audio caching moved one layer up to Chunks (see ticket 07's
     2026-09-13 amendment) and is no longer a Passage-level concern at all.
@@ -117,7 +129,6 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
             print(f"Passage {idx + 1}/{n_passages}: already annotated, skipping")
             entry = checkpoint.get_entry(chapter_number, idx)
             roster = list(entry.get("roster", roster))
-            cast = Cast.from_snapshot(entry.get("cast", {}), cast.overrides)
             for line in entry["annotation"]["lines"]:
                 all_lines.append(_resolve_line(line, cast))
             prev_line_text = entry["annotation"]["lines"][-1]["text"]
@@ -135,7 +146,7 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
         for line in result["lines"]:
             all_lines.append(_resolve_line(line, cast))
 
-        checkpoint.set_entry(chapter_number, idx, h, result, list(roster), cast.to_snapshot())
+        checkpoint.set_entry(chapter_number, idx, h, result, list(roster))
         print(f"Passage {idx + 1}/{n_passages}: annotated ({len(result['lines'])} lines)")
         prev_line_text = result["lines"][-1]["text"]
 
@@ -219,6 +230,12 @@ def _phase2_synthesize_chunks(chapter_number, chunks, workers):
 
 def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: int = DEFAULT_WORKERS):
     overrides = Cast.load_overrides(CAST_JSON_PATH)
+    voice_config = load_voice_config(VOICES_JSON_PATH)
+    # A single Cast instance for the entire run — Cast is stateless (a
+    # pure function of role + current config, see ticket 05's 2026-09-13
+    # amendment), so there's no per-Passage restore/reconstruction needed
+    # anymore, unlike before that amendment.
+    cast = Cast(voice_config=voice_config, overrides=overrides)
 
     book_slug = _book_slug(book_path)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -251,7 +268,7 @@ def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: in
         # file is simply orphaned on disk, never collided with or mistakenly reused.
         checkpoint.invalidate_from(chapter_number, first_pending)
 
-    roster, cast = _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending, overrides)
+    roster = _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending)
     if first_pending is None:
         print("All passages already annotated — nothing to (re-)annotate.")
     elif first_pending == 0:

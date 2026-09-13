@@ -22,8 +22,8 @@ Annotation Pass (OpenAI, gpt-4o, structured outputs — skipped for pure-narrati
   │  Passages, which short-circuit straight to a Narrator Line at zero cost)
   ▼
 Lines (speaker, gender, child-or-not, one-sentence tone instruction for dialogue)
-  │  Cast: persistent Speaker → Voice mapping, gender/child-partitioned voice pools,
-  │  manual override via cast.json
+  │  Cast: stateless role lookup (narrator/adult_male/adult_female/child) → Voice,
+  │  4 configurable defaults via voices.json, per-character override via cast.json
   ▼
 Chunks (consecutive Narrator Lines merged across Passages into one call each;
   │  each dialogue Line is its own Chunk) — content-hash-addressed audio caching
@@ -98,9 +98,38 @@ passage position.
 
 ### Overriding voice casting
 
-Auto-casting assigns each new character a voice from a small gender/age-partitioned
-pool. To pin a specific character to a specific voice, create `cast.json` at the project
-root:
+Voice casting is driven by 4 fixed, configurable **role**-voices — a Speaker's voice is
+looked up from its role (`narrator`, `adult_male`, `adult_female`, or `child`, derived
+from `is_narrator` + `speaker_gender` + `speaker_is_child`), not assigned per-character.
+By default:
+
+| Role | Default voice |
+|---|---|
+| `narrator` | Ryan |
+| `adult_male` | Ryan (same as the narrator — intentional) |
+| `adult_female` | Serena |
+| `child` (either stated gender) | Vivian |
+
+To change any of these, create `voices.json` at the project root with just the keys you
+want to override — any key you omit falls back to its own default individually:
+
+```json
+{
+  "adult_female": "Vivian"
+}
+```
+
+Since a Chunk's audio filename is content-hash-addressed over its text/voice/instruct
+(see [How it works](#how-it-works)), changing a role's voice in `voices.json` does not
+force any already-synthesized audio to be regenerated — only Chunks whose resolved voice
+actually changed get a new file. Chunk filenames are `chunk_{role}_{hash}.wav` (e.g.
+`chunk_adult_female_3f9a...wav`), where `{role}` is a human-readable prefix (not part of
+the hash) so you can find and manually delete a whole category of cached chunks — e.g.
+`rm audio_cache/<book>/chapter_01/chunk_adult_female_*.wav` — to force just those to
+resynthesize after changing that role's voice.
+
+To pin one specific named character to a specific voice regardless of its role, create
+`cast.json` at the project root:
 
 ```json
 {
@@ -109,7 +138,8 @@ root:
 }
 ```
 
-Entries here are never touched by auto-casting.
+`cast.json` entries are checked before the role-based default and always win (this
+includes overriding "Narrator" itself, if you want).
 
 ## Scope and limitations
 

@@ -150,3 +150,65 @@ already-correct concern. What changes:
   unaffected Chunk's audio_path and on-disk file were left untouched.
 
 Status: resolved
+
+## Amendment (2026-09-13) — Cast no longer needs a persisted snapshot at all
+
+Ticket 05's 2026-09-13 amendment replaced Cast's gender-partitioned
+pool/cycling design with 4 fixed, configurable role-voices — Cast is now a
+stateless, pure function of (role, current `voices.json` config), with no
+per-run assignment memory to track at all. That removes the last reason
+this ticket's checkpoint schema needed a per-Passage Cast snapshot:
+
+- `Checkpoint.set_entry`'s `cast_snapshot` parameter is removed entirely
+  (not made optional) — a Passage's checkpoint entry now stores only
+  `text_hash`, `annotation`, and `roster` (the Speaker-name roster, which
+  is unrelated and still needed for OpenAI Speaker-name-normalization
+  continuity across a resumed run — see this ticket's original "Speaker-
+  roster resume" answer above, completely unchanged). `main.py` now
+  constructs exactly one `Cast` instance at the top of `run()`, from
+  `cast.json` overrides and `voices.json`'s role-voice config, and reuses
+  it for the whole run — no per-Passage restore/reconstruction
+  (`Cast.from_snapshot`) exists anymore at all, in either the skip-and-
+  restore branch or `_reconstruct_state`.
+
+**This also settles, for real, something this ticket's design implicitly
+depended on but never had to prove before: changing `voices.json` between
+runs must NOT force regeneration of already-synthesized Chunk audio.**
+This falls directly out of the existing content-hash-addressed Chunk
+design (`chunking.py`'s hash is text+voice+instruct+is_narrator) now that
+Cast is a stateless, config-driven lookup rather than something restored
+from a per-run checkpoint snapshot: a Passage that was already annotated
+(and checkpointed) before the config change is unaffected by the change at
+the Passage/annotation level; when its Lines are turned into Chunks, the
+NEWLY-resolved voice for each Line's role is looked up against whatever
+`voices.json` says *right now* — so a role whose configured voice didn't
+change resolves to the exact same voice, the exact same Chunk hash, and
+the exact same (already-cached) audio_path, while a role whose configured
+voice DID change resolves to a new hash and a new, not-yet-existing
+audio_path — leaving the old file on disk, untouched, rather than
+colliding with or overwriting it.
+
+**Verified for real, not just reasoned about** (see this project's
+end-to-end verification against `tests/fixtures/synthetic_book.epub`):
+after a full run with `voices.json`'s `adult_female` set to `Serena`, then
+changing only that one key to `Vivian` and rerunning the same Chapter —
+the Narrator's and the adult male character's Chunk audio files were
+neither resynthesized nor touched (same file, same mtime — their role's
+voice didn't change, and their Passage's annotation was already cached),
+the adult female character's dialogue Chunk WAS freshly synthesized under
+a new `chunk_adult_female_<newhash>.wav` path, and the OLD
+`chunk_adult_female_<oldhash>.wav` (Serena-voiced) file was left sitting
+on disk, completely untouched.
+
+**Chunk audio filenames now include a human-readable role prefix
+specifically to support this workflow**: `chunk_{role}_{hash}.wav`, where
+`role` is one of `narrator`/`adult_male`/`adult_female`/`child` (see
+`chunking.chunk_audio_path`) — a filename-only addition, NOT folded into
+the hash itself (the hash inputs are unchanged: text+voice+instruct+
+is_narrator). This is what lets the project owner visually identify and
+manually bulk-delete a whole category of cached chunk files (e.g. every
+`chunk_adult_female_*.wav`) after changing that role's voice in
+`voices.json`, if they want to force those specific files to regenerate,
+without needing to compute or look up any hash by hand.
+
+Status: resolved

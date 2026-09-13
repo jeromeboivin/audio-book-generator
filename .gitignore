@@ -9,3 +9,4 @@ output/
 samples/*.epub
 
 cast.json
+voices.json
