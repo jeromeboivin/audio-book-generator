@@ -106,7 +106,15 @@ def run_job(job: SynthesisJob) -> tuple[int, str]:
     model = _get_model(job.model_id)
     wav, sr = tts.synthesize_line(model, job.text, job.voice, job.instruct)
     os.makedirs(os.path.dirname(job.audio_path), exist_ok=True)
-    sf.write(job.audio_path, wav, sr)
+    # Write to a temp file and rename into place atomically — a worker
+    # killed mid-write (OOM, power loss, SIGKILL) must never leave a
+    # truncated file sitting at the final audio_path, since a later run's
+    # resumability check is just `os.path.exists(audio_path)`: a partial
+    # file there would be wrongly treated as already-done and never
+    # retried, and would corrupt assembly's read of it.
+    tmp_path = f"{job.audio_path}.{os.getpid()}.tmp"
+    sf.write(tmp_path, wav, sr, format="WAV")
+    os.replace(tmp_path, job.audio_path)
     return job.chunk_index, job.audio_path
 
 
