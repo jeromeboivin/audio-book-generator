@@ -15,8 +15,10 @@ class Checkpoint:
     def _load(self) -> dict:
         if os.path.exists(self.path):
             with open(self.path, encoding="utf-8") as f:
-                return json.load(f)
-        return {"passages": {}}
+                data = json.load(f)
+                data.setdefault("narrator_instruct", {})
+                return data
+        return {"passages": {}, "narrator_instruct": {}}
 
     def save(self) -> None:
         tmp_path = self.path + ".tmp"
@@ -72,6 +74,20 @@ class Checkpoint:
             "annotation": annotation,
             "roster": roster_snapshot,
         }
+        self.save()
+
+    def get_narrator_instruct(self, chapter_number: int) -> str | None:
+        """The experimental, opt-in (see main.py's --narrator-tone flag)
+        chapter-wide Narrator `instruct` string, if one has already been
+        guessed and persisted for this Chapter. Persisted (not just
+        computed fresh every run) so a resumed run reuses the exact same
+        tone rather than risking a different guess from a second OpenAI
+        call — every Narrator Chunk in the Chapter must share one
+        consistent instruct, not drift between runs."""
+        return self.data.get("narrator_instruct", {}).get(str(chapter_number))
+
+    def set_narrator_instruct(self, chapter_number: int, instruct: str) -> None:
+        self.data.setdefault("narrator_instruct", {})[str(chapter_number)] = instruct
         self.save()
 
     def invalidate_from(self, chapter_number: int, from_passage_index: int) -> None:

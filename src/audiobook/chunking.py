@@ -165,13 +165,20 @@ def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_numbe
     All Narrator Lines share the fixed Narrator voice, so the buffered
     Chunk's `voice` is simply whatever the buffered Lines' (constant)
     voice is; a dialogue Chunk's voice/instruct are exactly its one Line's.
+    Narrator Lines normally carry `instruct=None` (see ticket 01/CONTEXT.md
+    — no tone parameter by default), but main.py's experimental
+    `--narrator-tone` flag can give every Narrator Line in a Chapter the
+    SAME chapter-wide instruct string; when it does, every buffered Line
+    shares that same value too (by construction), so tracking it exactly
+    like `buffer_voice` is correct.
     """
     chunks: list[Chunk] = []
     buffer_texts: list[str] = []
     buffer_voice: str | None = None
+    buffer_instruct: str | None = None
 
     def flush() -> None:
-        nonlocal buffer_voice
+        nonlocal buffer_voice, buffer_instruct
         if not buffer_texts:
             return
         text = " ".join(buffer_texts)
@@ -184,20 +191,22 @@ def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_numbe
                 text=text,
                 is_narrator=True,
                 voice=buffer_voice,
-                instruct=None,
+                instruct=buffer_instruct,
                 role="narrator",
                 audio_path=chunk_audio_path(
-                    audio_cache_dir, chapter_number, text, True, buffer_voice, None, "narrator"
+                    audio_cache_dir, chapter_number, text, True, buffer_voice, buffer_instruct, "narrator"
                 ),
             )
         )
         buffer_texts.clear()
         buffer_voice = None
+        buffer_instruct = None
 
     for line in lines:
         if line.is_narrator:
             buffer_texts.append(_ensure_sentence_end(line.text))
             buffer_voice = line.voice
+            buffer_instruct = line.instruct
         else:
             flush()
             text = _ensure_sentence_end(line.text)

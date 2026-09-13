@@ -54,6 +54,25 @@ def _build_narration_passages(chapter) -> list[Passage]:
     return [heading_passage, title_passage] + chapter.passages
 
 
+NARRATOR_TONE_SAMPLE_PASSAGES = 5
+NARRATOR_TONE_SAMPLE_MAX_CHARS_PER_PASSAGE = 800
+
+
+def _narrator_tone_sample(chapter) -> str:
+    """A small, fixed sample of the Chapter's opening — its heading and
+    title plus its first few body Passages — for
+    `annotation.guess_narrator_tone` (see main.py's `--narrator-tone`
+    flag). Deliberately NOT the whole Chapter: this is meant to be a
+    cheap, quick "what's the overall register here" guess, not a full
+    read. Each sampled Passage is truncated defensively (some books'
+    paragraphs can be very long) so one giant paragraph can't blow up the
+    sample's size."""
+    parts = [chapter.heading, chapter.title]
+    for passage in chapter.passages[:NARRATOR_TONE_SAMPLE_PASSAGES]:
+        parts.append(passage.text[:NARRATOR_TONE_SAMPLE_MAX_CHARS_PER_PASSAGE])
+    return "\n".join(parts)
+
+
 def _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending):
     """Only the running Speaker roster needs restoring on resume — Cast is
     stateless now (see ticket 05's 2026-09-13 amendment), so there is no
@@ -71,7 +90,7 @@ def _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending):
     return list(entry.get("roster", []))
 
 
-def _resolve_line(line: dict, cast: Cast) -> AnnotatedLine:
+def _resolve_line(line: dict, cast: Cast, narrator_instruct: str | None = None) -> AnnotatedLine:
     """Turns one raw annotation Line dict (as returned by an Annotation
     Pass call, a Narrator short-circuit, or restored verbatim from a
     checkpointed Passage) into an AnnotatedLine ready for chunk-building —
@@ -80,20 +99,27 @@ def _resolve_line(line: dict, cast: Cast) -> AnnotatedLine:
     2026-09-13 amendment) applied uniformly to both Narrator and dialogue
     Lines, so calling this on a restored (already-checkpointed) Passage's
     lines against the same single `Cast` instance used for the whole run
-    is always correct and deterministic."""
+    is always correct and deterministic.
+
+    `narrator_instruct`: None by default (Narrator Lines carry no
+    `instruct`, as always) — but when main.py's experimental
+    `--narrator-tone` flag is on, this is the SAME chapter-wide instruct
+    string for every Narrator Line in the Chapter (see
+    `annotation.guess_narrator_tone`), applied here uniformly. Ignored for
+    non-Narrator Lines, which always use their own per-Line `instruct`."""
     voice = cast.voice_for(line["speaker"], line["speaker_gender"], line["speaker_is_child"], is_narrator=line["is_narrator"])
     role = cast.role_for(line["speaker_gender"], line["speaker_is_child"], is_narrator=line["is_narrator"])
     return AnnotatedLine(
         text=line["text"],
         is_narrator=line["is_narrator"],
         voice=voice,
-        instruct=None if line["is_narrator"] else line.get("instruct"),
+        instruct=narrator_instruct if line["is_narrator"] else line.get("instruct"),
         role=role,
     )
 
 
 def _phase1_annotate_and_assign_voices(
-    passages, chapter_number, n_passages, checkpoint, roster, cast, openai_model
+    passages, chapter_number, n_passages, checkpoint, roster, cast, openai_model, narrator_instruct=None
 ):
     """Sequential pass, unchanged in spirit from before the Chunk-layer
     refactor: skip already-annotated passages (restoring the roster; Cast
@@ -137,7 +163,7 @@ def _phase1_annotate_and_assign_voices(
             entry = checkpoint.get_entry(chapter_number, idx)
             roster = list(entry.get("roster", roster))
             for line in entry["annotation"]["lines"]:
-                all_lines.append(_resolve_line(line, cast))
+                all_lines.append(_resolve_line(line, cast, narrator_instruct))
             prev_line_text = entry["annotation"]["lines"][-1]["text"]
             continue
 
@@ -151,7 +177,7 @@ def _phase1_annotate_and_assign_voices(
 
         annotation.update_roster(roster, result["lines"])
         for line in result["lines"]:
-            all_lines.append(_resolve_line(line, cast))
+            all_lines.append(_resolve_line(line, cast, narrator_instruct))
 
         checkpoint.set_entry(chapter_number, idx, h, result, list(roster))
         print(f"Passage {idx + 1}/{n_passages}: annotated ({len(result['lines'])} lines)")
@@ -241,6 +267,7 @@ def run(
     skip_tts: bool = False,
     workers: int = DEFAULT_WORKERS,
     openai_model: str = annotation.DEFAULT_MODEL,
+    narrator_tone: bool = False,
 ):
     overrides = Cast.load_overrides(CAST_JSON_PATH)
     voice_config = load_voice_config(VOICES_JSON_PATH)
@@ -262,6 +289,19 @@ def run(
     passages = _build_narration_passages(chapter)
     n_passages = len(passages)
     print(f"Chapter {chapter_number}: '{chapter.title}', {n_passages} passages (incl. title)")
+
+    narrator_instruct = None
+    if narrator_tone:
+        narrator_instruct = checkpoint.get_narrator_instruct(chapter_number)
+        if narrator_instruct is not None:
+            print(f"--narrator-tone: reusing cached tone for this Chapter: {narrator_instruct!r}")
+        else:
+            print("--narrator-tone: guessing this Chapter's overall narrative tone via OpenAI ...")
+            sample = _narrator_tone_sample(chapter)
+            client = annotation.make_client()
+            narrator_instruct = annotation.guess_narrator_tone(client, sample, model=openai_model)
+            checkpoint.set_narrator_instruct(chapter_number, narrator_instruct)
+            print(f"--narrator-tone: guessed and cached: {narrator_instruct!r}")
 
     first_pending = None
     for idx, passage in enumerate(passages):
@@ -292,7 +332,7 @@ def run(
     # Phase 1 (sequential): annotate + assign Voices for every passage, and
     # accumulate the Chapter's full ordered Line list.
     all_lines = _phase1_annotate_and_assign_voices(
-        passages, chapter_number, n_passages, checkpoint, roster, cast, openai_model
+        passages, chapter_number, n_passages, checkpoint, roster, cast, openai_model, narrator_instruct
     )
 
     if skip_tts:
@@ -333,10 +373,25 @@ def main():
         help=f"OpenAI model for the Annotation Pass (default {annotation.DEFAULT_MODEL}, "
         "or set via the OPENAI_MODEL env var) — must support structured outputs (json_schema)",
     )
+    parser.add_argument(
+        "--narrator-tone",
+        action="store_true",
+        help="(experimental, off by default) guess this Chapter's overall narrative tone "
+        "from its opening (one extra OpenAI call) and apply it as a single, chapter-wide "
+        "instruct string to every Narrator Chunk, instead of Narrator Lines carrying no "
+        "instruct at all",
+    )
     args = parser.parse_args()
     if args.workers < 1:
         parser.error("--workers must be >= 1")
-    run(args.book, args.chapter, skip_tts=args.skip_tts, workers=args.workers, openai_model=args.openai_model)
+    run(
+        args.book,
+        args.chapter,
+        skip_tts=args.skip_tts,
+        workers=args.workers,
+        openai_model=args.openai_model,
+        narrator_tone=args.narrator_tone,
+    )
 
 
 if __name__ == "__main__":

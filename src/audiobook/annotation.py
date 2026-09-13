@@ -218,6 +218,68 @@ def annotate_passage(
     ) from last_error
 
 
+NARRATOR_TONE_SCHEMA = {
+    "name": "narrator_tone",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "narrator_instruct": {"type": "string"},
+        },
+        "required": ["narrator_instruct"],
+        "additionalProperties": False,
+    },
+}
+
+NARRATOR_TONE_SYSTEM_PROMPT = """You read a short sample of a Chapter from a French
+novel: its heading/title plus its first few paragraphs (not the whole Chapter).
+
+Produce a SHORT natural-language `instruct` string describing the overall tone/mood/pace
+the Narrator should maintain while reading this ENTIRE Chapter aloud — one or two clauses,
+in the same style as a Qwen3-TTS instruct string (e.g. "Read in a calm, wistful, reflective
+tone throughout." or "Maintain a brisk, matter-of-fact narrative pace with an undercurrent
+of tension.").
+
+This is a SINGLE, Chapter-wide instruction, not a per-moment one: describe the general
+atmosphere/register the whole Chapter's narration should sit in, not any single sentence's
+specific emotion — that's decided separately, per dialogue Line, elsewhere. Keep it short."""
+
+
+def guess_narrator_tone(client: OpenAI, sample_text: str, model: str = DEFAULT_MODEL) -> str:
+    """Experimental (see main.py's --narrator-tone flag, off by default):
+    one extra OpenAI call, made once per Chapter — not per Passage/Line —
+    that asks the model to guess the Chapter's overall narrative tone from
+    a small, fixed sample of its opening (heading/title + first few
+    Passages) and produce a single short `instruct` string. That one
+    string is then applied to EVERY Narrator Chunk in the Chapter (see
+    main.py's `_resolve_line`), for consistency — a Chapter's narration
+    shouldn't randomly shift register from one Chunk to the next.
+
+    Retried once then raises, same "fail loudly, no silent fallback"
+    policy as `annotate_passage` — an experimental feature failing
+    silently into "no tone" would be a worse surprise than the run just
+    stopping."""
+    last_error = None
+    for attempt in range(2):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": NARRATOR_TONE_SYSTEM_PROMPT},
+                    {"role": "user", "content": sample_text},
+                ],
+                response_format={"type": "json_schema", "json_schema": NARRATOR_TONE_SCHEMA},
+            )
+            data = json.loads(resp.choices[0].message.content)
+            instruct = data.get("narrator_instruct")
+            if not instruct:
+                raise AnnotationError("narrator tone response missing non-empty 'narrator_instruct'")
+            return instruct
+        except Exception as e:
+            last_error = e
+    raise AnnotationError(f"Narrator tone guess failed twice (aborting run): {last_error}") from last_error
+
+
 def make_client() -> OpenAI:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:

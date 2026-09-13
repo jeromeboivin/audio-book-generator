@@ -97,6 +97,7 @@ python src/audiobook/main.py --book /path/to/your-book.epub --chapter 1 --worker
 | `--workers N` | `2` | Parallel TTS worker processes |
 | `--skip-tts` | off | Parse + annotate only, no synthesis (useful to sanity-check annotation cost/output before committing to a full run) |
 | `--openai-model NAME` | `gpt-5.6-luna` (or `$OPENAI_MODEL` if set) | Model used for the Annotation Pass — must support structured outputs (`response_format={"type": "json_schema", ...}`) |
+| `--narrator-tone` | off | *(experimental)* Guess the Chapter's overall narrative tone from its opening (one extra OpenAI call, cached per Chapter) and give every Narrator Chunk that same instruct string, instead of none at all |
 
 Output lands in `output/`; per-chunk audio is cached in `audio_cache/` (content-hash
 addressed — a chunk is a run of merged consecutive Narrator lines, or one dialogue line);
