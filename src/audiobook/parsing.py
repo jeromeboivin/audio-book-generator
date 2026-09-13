@@ -37,8 +37,18 @@ class Passage:
 
 
 class Chapter:
-    def __init__(self, number: int, title: str, passages: list[Passage]):
+    """`heading` is the `<h2>` text (e.g. "Chapitre I") and `title` is the
+    `<h3>` text (e.g. "Monsieur Myriel") — the two elements that together
+    define this Chapter's boundary (see `extract_chapter`). Both are real
+    narration content and must be narrated as such, not just consulted for
+    boundary detection and discarded — a real bug found in production: the
+    `<h2>` chapter-number heading was never making it into the narrated
+    output at all, only `title` was (see main.py's
+    `_build_narration_passages`)."""
+
+    def __init__(self, number: int, heading: str, title: str, passages: list[Passage]):
         self.number = number
+        self.heading = heading
         self.title = title
         self.passages = passages
 
@@ -110,11 +120,12 @@ def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
     for i, el in enumerate(elements):
         if el.name != "h2":
             continue
-        if not CHAPTER_HEADING_RE.fullmatch(el.get_text().strip()):
+        heading_text = el.get_text().strip()
+        if not CHAPTER_HEADING_RE.fullmatch(heading_text):
             continue
         nxt = elements[i + 1] if i + 1 < len(elements) else None
         if nxt is not None and nxt.name == "h3":
-            boundaries.append((i, nxt.get_text().strip()))
+            boundaries.append((i, heading_text, nxt.get_text().strip()))
 
     if chapter_number < 1 or chapter_number > len(boundaries):
         raise ValueError(
@@ -122,7 +133,7 @@ def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
             f"boundaries detected in {epub_path}"
         )
 
-    start_idx, title = boundaries[chapter_number - 1]
+    start_idx, heading, title = boundaries[chapter_number - 1]
     end_idx = (
         boundaries[chapter_number][0]
         if chapter_number < len(boundaries)
@@ -151,4 +162,4 @@ def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
         if text:
             passages.append(Passage(text=text, has_dialogue=_has_dialogue_line(raw_text)))
 
-    return Chapter(number=chapter_number, title=title, passages=passages)
+    return Chapter(number=chapter_number, heading=heading, title=title, passages=passages)

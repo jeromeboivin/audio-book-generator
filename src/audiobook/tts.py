@@ -4,11 +4,13 @@ from qwen_tts import Qwen3TTSModel
 # Narrator Lines (is_narrator=true, chapter titles included) are always
 # synthesized with the smaller 0.6B model and never receive an `instruct`
 # string. Dialogue Lines (any non-Narrator Speaker) always use the larger
-# 1.7B model with a one-sentence OpenAI-generated `instruct` string. This is
-# a permanent model-routing rule, not a coincidence of what happened to be
-# wired up first — see ticket 01's amendment: the official README only marks
-# "Instruction Control" (its `instruct` parameter) as benchmarked/documented
-# for the 1.7B CustomVoice/VoiceDesign variants, not the 0.6B.
+# 1.7B model with a multi-dimensional OpenAI-generated `instruct` string
+# (emotion, pace, volume, delivery quality — see annotation.py's system
+# prompt). This is a permanent model-routing rule, not a coincidence of
+# what happened to be wired up first — see ticket 01's amendment: the
+# official README only marks "Instruction Control" (its `instruct`
+# parameter) as benchmarked/documented for the 1.7B CustomVoice/VoiceDesign
+# variants, not the 0.6B.
 NARRATOR_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
 DIALOGUE_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 SAMPLE_RATE = 24000

@@ -45,8 +45,33 @@ SYSTEM_PROMPT = """You annotate one Passage (one paragraph) of a French novel fo
 Break the Passage into an ordered list of Lines. Each Line has exactly one Speaker.
 The Narrator is a Speaker like any other (is_narrator=true, speaker="Narrator", instruct=null).
 A dialogue Line (any non-Narrator speaker) must carry a natural-language `instruct` string
-describing the tone/emotion to speak it with, expressed as exactly ONE SENTENCE (e.g. "speak
-with hesitant relief.").
+telling the TTS engine (Qwen3-TTS CustomVoice) how to perform it.
+
+Qwen3-TTS's own published examples show a single generic adjective ("Very happy.") works
+but under-uses what the model actually follows — richer instructions covering MULTIPLE
+performance dimensions produce noticeably more controlled, expressive speech. Cover, when
+relevant to this specific Line (don't pad mechanically if a dimension genuinely doesn't
+apply):
+  - **emotion** — the core feeling (required every time)
+  - **pace** — fast/slow/hesitant/rushed, and whether it changes during the Line
+  - **volume** — loud/quiet/whispered, and whether it changes during the Line
+  - **delivery quality** — trembling, breathless, laughing, choked up, sharp, clipped, etc.
+  - **trajectory** — if the Line's own text shows the character's feeling shift partway
+    through (e.g. calm opening, anger by the end), describe that arc rather than only the
+    Line's final tone — Qwen3-TTS supports this "gradual control" pattern directly.
+Do NOT describe gender, age, accent, or vocal identity/timbre in `instruct` — the Voice
+(and therefore that identity) is already fixed by which character is speaking, not by this
+string; only describe HOW to perform the line, never WHO is speaking it.
+Match length to what the Line actually needs: a short, simple exclamation is well served by
+one clause ("Speak with quiet dread."); a longer or emotionally complex Line is well served
+by two or three clauses combining several of the dimensions above. Never restate the
+Line's own words, only how to perform them. Examples (both are valid `instruct` strings,
+depending on what the Line calls for):
+  - "Speak with quiet dread."
+  - "A hushed, urgent whisper — quiet almost to the point of being inaudible, tense and
+    secretive, words clipped short."
+  - "Start measured and controlled, then let volume and pace rise sharply as anger takes
+    over, voice growing sharper and more clipped toward the end."
 
 French dialogue is marked with a leading em-dash (—). A common pattern is a mid-quote
 narrator attribution tag (an "incise") that interrupts a single character's utterance

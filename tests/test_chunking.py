@@ -17,7 +17,28 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from audiobook.cast import Cast
-from audiobook.chunking import AnnotatedLine, build_chunks
+from audiobook.chunking import AnnotatedLine, _ensure_sentence_end, build_chunks
+
+
+def test_ensure_sentence_end_adds_period_only_when_unpunctuated():
+    """Regression test: the project owner reported that a chapter heading,
+    subtitle, or any paragraph not ending in a punctuation character (or an
+    ellipsis) produced no pause when merged with adjacent Narrator text,
+    because Qwen3-TTS reads straight through with no sentence-boundary cue.
+    Only text with NO trailing punctuation at all should get a period
+    appended; anything already ending in punctuation (including a colon or
+    ellipsis) is left untouched."""
+    assert _ensure_sentence_end("Chapitre I") == "Chapitre I."
+    assert _ensure_sentence_end("Monsieur Myriel") == "Monsieur Myriel."
+    assert _ensure_sentence_end("Already punctuated.") == "Already punctuated."
+    assert _ensure_sentence_end("An exclamation!") == "An exclamation!"
+    assert _ensure_sentence_end("A question?") == "A question?"
+    assert _ensure_sentence_end("Trailing colon:") == "Trailing colon:"
+    assert _ensure_sentence_end("Trailing comma,") == "Trailing comma,"
+    assert _ensure_sentence_end("An ellipsis...") == "An ellipsis..."
+    assert _ensure_sentence_end("Unicode ellipsis…") == "Unicode ellipsis…"
+    assert _ensure_sentence_end("Trailing whitespace   ") == "Trailing whitespace."
+    assert _ensure_sentence_end("") == ""
 
 
 def test_owner_worked_example():
@@ -26,8 +47,12 @@ def test_owner_worked_example():
     (Narrator), "Paragraph 2: —Dialog 1 —Dialog 2" (splits via annotation
     into Narrator "Paragraph 2:", Dialogue "Dialog 1", Dialogue "Dialog 2"),
     "Paragraph 3" (Narrator). Expected Chunks: exactly
-    ["Chapter X Sub-title Paragraph 1 Paragraph 2:", "Dialog 1", "Dialog 2",
-    "Paragraph 3"] — 4 Chunks."""
+    ["Chapter X. Sub-title. Paragraph 1. Paragraph 2:", "Dialog 1.",
+    "Dialog 2.", "Paragraph 3."] — 4 Chunks. Each unpunctuated segment gets
+    a period appended before merging (see `_ensure_sentence_end`) so
+    Qwen3-TTS actually pauses at each internal boundary instead of reading
+    straight through; "Paragraph 2:" already ends in punctuation (a colon)
+    so it's left alone, not given a redundant second one."""
     lines = [
         AnnotatedLine(text="Chapter X", is_narrator=True, voice="Ryan", instruct=None, role="narrator"),
         AnnotatedLine(text="Sub-title", is_narrator=True, voice="Ryan", instruct=None, role="narrator"),
@@ -41,10 +66,10 @@ def test_owner_worked_example():
     chunks = build_chunks(lines, audio_cache_dir="/tmp/does-not-matter", chapter_number=1)
 
     assert [c.text for c in chunks] == [
-        "Chapter X Sub-title Paragraph 1 Paragraph 2:",
-        "Dialog 1",
-        "Dialog 2",
-        "Paragraph 3",
+        "Chapter X. Sub-title. Paragraph 1. Paragraph 2:",
+        "Dialog 1.",
+        "Dialog 2.",
+        "Paragraph 3.",
     ], [c.text for c in chunks]
     assert len(chunks) == 4
     assert [c.is_narrator for c in chunks] == [True, False, False, True]
@@ -63,7 +88,7 @@ def test_no_dialogue_produces_one_merged_chunk():
     ]
     chunks = build_chunks(lines, audio_cache_dir="/tmp/x", chapter_number=1)
     assert len(chunks) == 1, chunks
-    assert chunks[0].text == "A B C"
+    assert chunks[0].text == "A. B. C."
     assert chunks[0].role == "narrator"
 
 
@@ -88,7 +113,7 @@ def test_leading_and_trailing_dialogue():
         AnnotatedLine(text="Au revoir", is_narrator=False, voice="Serena", instruct="sadly.", role="adult_female"),
     ]
     chunks = build_chunks(lines, audio_cache_dir="/tmp/x", chapter_number=1)
-    assert [c.text for c in chunks] == ["Bonjour", "Middle narration", "Au revoir"]
+    assert [c.text for c in chunks] == ["Bonjour.", "Middle narration.", "Au revoir."]
     assert [c.is_narrator for c in chunks] == [False, True, False]
     assert [c.role for c in chunks] == ["adult_male", "narrator", "adult_female"]
 
@@ -100,7 +125,7 @@ def test_all_dialogue_produces_one_chunk_per_line():
     ]
     chunks = build_chunks(lines, audio_cache_dir="/tmp/x", chapter_number=1)
     assert len(chunks) == 2
-    assert chunks[0].text == "Un" and chunks[1].text == "Deux"
+    assert chunks[0].text == "Un." and chunks[1].text == "Deux."
 
 
 def test_empty_input_produces_no_chunks():

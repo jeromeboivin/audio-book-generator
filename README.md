@@ -18,7 +18,8 @@ Chapter (title + ordered Passages, one per source paragraph or non-title heading
 Annotation Pass (OpenAI, structured outputs — skipped for pure-narration Passages,
   │  which short-circuit straight to a Narrator Line at zero cost)
   ▼
-Lines (speaker, gender, child-or-not, one-sentence tone instruction for dialogue)
+Lines (speaker, gender, child-or-not, multi-dimensional tone instruction for dialogue —
+  │  emotion, pace, volume, delivery quality, even an emotional arc within one Line)
   │  Cast: stateless role lookup (narrator/adult_male/adult_female/child) → Voice,
   │  4 configurable defaults via voices.json, per-character override via cast.json
   ▼
@@ -27,7 +28,7 @@ Chunks (consecutive Narrator Lines merged across Passages into one call each;
   ▼
 TTS synthesis (Qwen3-TTS), one call per Chunk
   │  Narrator Chunks  → 0.6B-CustomVoice, no tone parameter
-  │  Dialogue Chunks  → 1.7B-CustomVoice, one-sentence OpenAI-generated instruct string
+  │  Dialogue Chunks  → 1.7B-CustomVoice, rich OpenAI-generated instruct string
   │  GPU auto-detected (CUDA + best-effort flash-attention); CPU float32 fallback
   ▼
 Assembly (silence-padded concatenation between Chunks) → output/chapitre_NN_<title>.wav

@@ -23,7 +23,32 @@ exists on disk and is correctly skipped, with no separate persisted
 
 import hashlib
 import os
+import string
 from dataclasses import dataclass
+
+# Any punctuation character (plus the Unicode ellipsis "…" and closing
+# guillemet "»", neither of which are in string.punctuation) counts as
+# "already ends properly" — matches the rule as specified: only text with
+# NO trailing punctuation at all (headings, subtitles) needs a period
+# added. A trailing colon, comma, etc. is left alone rather than getting a
+# redundant period appended after it.
+_SENTENCE_END_CHARS = frozenset(string.punctuation) | {"…", "»"}
+
+
+def _ensure_sentence_end(text: str) -> str:
+    """Appends a period if `text` doesn't already end in some punctuation
+    character or ellipsis — headings and subtitles ("Chapitre I",
+    "Monsieur Myriel") normally carry no terminal punctuation at all, so
+    when merged with adjacent Narrator text into one Chunk (see
+    `build_chunks`), Qwen3-TTS reads straight through with no pause at all
+    between them. Applied per-segment, before joining, so every internal
+    merge boundary gets one, not just the Chunk's overall end. Idempotent:
+    a segment already ending in any punctuation (`.`/`!`/`?`/`:`/`…`/...)
+    is left untouched."""
+    stripped = text.rstrip()
+    if not stripped or stripped[-1] in _SENTENCE_END_CHARS:
+        return stripped
+    return stripped + "."
 
 
 @dataclass
@@ -171,13 +196,14 @@ def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_numbe
 
     for line in lines:
         if line.is_narrator:
-            buffer_texts.append(line.text)
+            buffer_texts.append(_ensure_sentence_end(line.text))
             buffer_voice = line.voice
         else:
             flush()
+            text = _ensure_sentence_end(line.text)
             chunks.append(
                 Chunk(
-                    text=line.text,
+                    text=text,
                     is_narrator=False,
                     voice=line.voice,
                     instruct=line.instruct,
@@ -185,7 +211,7 @@ def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_numbe
                     audio_path=chunk_audio_path(
                         audio_cache_dir,
                         chapter_number,
-                        line.text,
+                        text,
                         False,
                         line.voice,
                         line.instruct,

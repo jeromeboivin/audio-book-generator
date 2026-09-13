@@ -36,16 +36,22 @@ def _book_slug(book_path: str) -> str:
 
 
 def _build_narration_passages(chapter) -> list[Passage]:
-    """The full list of things to narrate for a Chapter: the chapter's own
-    title first (passage index 0), followed by its body Passages (index
-    1..N — shifted by one from parsing.extract_chapter's own indexing).
+    """The full list of things to narrate for a Chapter: its own heading
+    (e.g. "Chapitre I") first, then its title (e.g. "Monsieur Myriel"),
+    then its body Passages (indices shifted by two from
+    parsing.extract_chapter's own indexing).
 
-    The title Passage's `has_dialogue` is hard-set False, not computed —
-    a title is never dialogue and must always short-circuit straight to a
-    Narrator Line via `annotation.short_circuit_narrator`, never sent to
-    OpenAI and never subject to the has_dialogue/em-dash check at all."""
+    Both heading and title are real narration content, not just boundary
+    markers to be discarded — a real bug found in production: `heading`
+    (the <h2> "Chapitre N" text) was never narrated at all, only `title`
+    (the <h3>) was. Both Passages' `has_dialogue` is hard-set False, not
+    computed — neither is ever dialogue, and both must always
+    short-circuit straight to a Narrator Line via
+    `annotation.short_circuit_narrator`, never sent to OpenAI and never
+    subject to the has_dialogue/em-dash check at all."""
+    heading_passage = Passage(text=chapter.heading, has_dialogue=False)
     title_passage = Passage(text=chapter.title, has_dialogue=False)
-    return [title_passage] + chapter.passages
+    return [heading_passage, title_passage] + chapter.passages
 
 
 def _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending):
