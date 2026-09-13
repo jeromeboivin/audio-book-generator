@@ -51,6 +51,17 @@ def _select_device_dtype_and_attn() -> dict:
     return kwargs
 
 
+def _looks_like_attn_implementation_failure(e: Exception) -> bool:
+    """Best-effort check that a `from_pretrained` failure is actually about
+    the `attn_implementation` kwarg, not some unrelated failure (bad HF
+    cache, OOM, network error fetching weights) that happens to occur on the
+    same call. Only failures that look attention-related should be silently
+    downgraded to the no-flash-attn path — anything else should surface as
+    itself, not get misattributed and masked."""
+    msg = str(e).lower()
+    return "flash" in msg or "attn_implementation" in msg or "attention" in msg
+
+
 def load_model(model_id: str):
     """Loads a Qwen3-TTS model by id, using the shared device/dtype/attn
     selection above. Used for both NARRATOR_MODEL_ID and DIALOGUE_MODEL_ID —
@@ -60,10 +71,10 @@ def load_model(model_id: str):
     try:
         return Qwen3TTSModel.from_pretrained(model_id, **kwargs)
     except Exception as e:
-        if kwargs.get("attn_implementation") == "flash_attention_2":
+        if kwargs.get("attn_implementation") == "flash_attention_2" and _looks_like_attn_implementation_failure(e):
             print(
                 f"[tts] loading {model_id} with attn_implementation=flash_attention_2 failed "
-                f"({e!r}) — retrying without it.",
+                f"(looks attention-related: {e!r}) — retrying without it.",
                 flush=True,
             )
             kwargs.pop("attn_implementation")

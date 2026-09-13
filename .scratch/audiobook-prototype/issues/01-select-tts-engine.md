@@ -130,7 +130,24 @@ missing flash-attn.
 for real on this hardware; the CUDA + flash-attention branch is implemented
 per the README's documented pattern but is unverified beyond a unit test
 that monkeypatches `torch.cuda.is_available()` to confirm the right
-`from_pretrained` kwargs get constructed (real GPU execution untested).
+`from_pretrained` kwargs get constructed (real GPU execution untested). That
+test is checked in at `tests/test_tts_device_selection.py` — a review pass
+found the original implementation claimed this coverage without it actually
+being persisted to the repo; it's a real file now, runnable directly
+(`python tests/test_tts_device_selection.py`, no pytest dependency).
+
+**Amendment (2026-09-13, same day) — narrowed the flash-attn failure
+catch**: the same review pass found `load_model`'s retry-without-flash-attn
+`except Exception` was unfiltered — it would silently retry (and
+misattribute to flash-attn) *any* `from_pretrained` failure, including ones
+with nothing to do with attention (bad HF cache, OOM, a network error
+fetching weights), permanently and silently forfeiting flash-attention
+acceleration for an unrelated transient problem, and discarding the original
+(possibly more informative) exception if the retry also failed. Fixed:
+`_looks_like_attn_implementation_failure` checks the exception message for
+attention/flash-related wording before deciding to retry without the kwarg;
+anything else propagates immediately as itself. Covered by
+`tests/test_tts_device_selection.py`'s two failure-path cases.
 
 **Model loading is now lazy, per model, per worker process**: a
 `ProcessPoolExecutor` worker loads the 0.6B model the first time it actually
