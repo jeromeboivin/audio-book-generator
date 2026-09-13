@@ -7,8 +7,14 @@ import soundfile as sf
 
 from .tts import SAMPLE_RATE
 
-LINE_GAP_S = 0.35
-PASSAGE_GAP_S = 0.7
+# Single inter-Chunk silence rule (replaces the old two-tier ~300-400ms
+# between Lines / ~600-800ms between Passages rule — see ticket 06's
+# 2026-09-13 amendment). A Chunk boundary is now the only kind of boundary
+# that exists between separately-synthesized audio (Line/Passage boundaries
+# no longer align with synthesis-call boundaries at all, since consecutive
+# Narrator Lines — even across Passages — are merged into one Chunk). No
+# silence is inserted WITHIN a Chunk; it's one continuous TTS call's output.
+CHUNK_GAP_S = 0.7
 
 
 def slugify(title: str) -> str:
@@ -26,23 +32,23 @@ def _silence(seconds: float, sample_rate: int) -> np.ndarray:
 
 
 def assemble_chapter(
-    passages_line_audio_paths: list[list[str]],
+    chunk_audio_paths: list[str],
     chapter_number: int,
     title: str,
     output_dir: str,
     sample_rate: int = SAMPLE_RATE,
 ) -> str:
-    chunks = []
-    for p_idx, line_paths in enumerate(passages_line_audio_paths):
-        if p_idx > 0:
-            chunks.append(_silence(PASSAGE_GAP_S, sample_rate))
-        for l_idx, path in enumerate(line_paths):
-            if l_idx > 0:
-                chunks.append(_silence(LINE_GAP_S, sample_rate))
-            wav, _sr = sf.read(path, dtype="float32")
-            chunks.append(wav)
+    """Concatenates a Chapter's already-synthesized Chunk audio files, in
+    order, inserting `CHUNK_GAP_S` of silence between every consecutive
+    pair (and nowhere else), then writes the result as one WAV file."""
+    pieces = []
+    for idx, path in enumerate(chunk_audio_paths):
+        if idx > 0:
+            pieces.append(_silence(CHUNK_GAP_S, sample_rate))
+        wav, _sr = sf.read(path, dtype="float32")
+        pieces.append(wav)
 
-    audio = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+    audio = np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, chapter_filename(chapter_number, title))

@@ -114,4 +114,47 @@ so no additional passage was newly flagged here, but the bug the fix
 targets (embedded mid-paragraph dialogue) is real and independently
 confirmed against a synthetic repro.
 
+**Amendment (2026-09-13) — non-title headings now narrated, not dropped**:
+a real gap found by the project owner. `_iter_body_elements` only ever
+yielded `h2`/`h3`/`p`, and the passage-building loop did
+`if el.name != "p": continue` — so any OTHER heading-level element inside
+a chapter's body (a subtitle, an epigraph, or a "Livre N" section heading
+that happens to trail a chapter's last paragraph) was invisible to
+narration entirely: not merged, not chunked, just silently never read,
+with zero trace.
+
+Fixed by broadening what counts as passage-like content: `_iter_body_elements`
+now yields `h1`-`h6` in addition to `p` (checked directly against the real
+test EPUB, `samples/Les misérables Tome I Fantine.epub`: it uses h1 — title
+page only, "Les Misérables" / "Victor Hugo", entirely outside any chapter
+boundary — h2, and h3; no h4/h5/h6 occur anywhere in the file, but the code
+handles them generally rather than assuming they'll never appear), and the
+passage-building loop no longer special-cases by tag name at all — every
+element in `elements[start_idx + 2 : end_idx]` (i.e. everything except the
+two boundary-defining elements themselves) becomes a Passage, run through
+the exact same `.get_text()` + whitespace-normalization + has_dialogue
+logic uniformly, whether it's a `<p>` or a heading.
+
+This can't accidentally swallow the start of the next real chapter:
+`end_idx` is still exactly the next chapter boundary's own `<h2>` index,
+unchanged by this amendment. Verified directly against the real EPUB: all
+70 chapter boundaries are still exactly an `<h2>` matching `Chapitre \w+`
+immediately followed by an `<h3>`, and `end_idx` still stops at exactly
+that next boundary in every case.
+
+Confirmed against the real book: **Chapter 1 itself has no non-title
+headings inside its body** — its slice is exactly the same 16 `<p>`
+elements as before this amendment, so the parsing sanity check is
+unchanged: 16 body passages, 963 words, same 2 dialogue-flagged passages
+(indices 5 and 6 with the title occupying index 0). The gap is real
+elsewhere in the same book, though: 8 of the other 69 chapters (e.g.
+Chapter 14, "Ce qu'il pensait") have exactly one extra `<h2>` inside their
+body — a "Livre N—<title>" section heading (e.g. "Livre deuxième—La
+chute") that trails the chapter's last paragraph, immediately before the
+next real chapter's own `<h2>`+`<h3>` pair. Before this amendment, that
+heading's text was silently dropped for those 8 chapters; after it, it's
+narrated as an ordinary trailing Passage. This doesn't change this map's
+Chapter-1-only destination, but confirms the fix targets a real defect in
+this same EPUB, not a hypothetical one.
+
 Status: resolved

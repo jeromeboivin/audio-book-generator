@@ -31,14 +31,26 @@ class Checkpoint:
     def get_entry(self, chapter_number: int, passage_index: int) -> dict | None:
         return self.data["passages"].get(self._key(chapter_number, passage_index))
 
-    def is_passage_done(self, chapter_number: int, passage_index: int, text_hash: str) -> bool:
+    def is_passage_annotated(self, chapter_number: int, passage_index: int, text_hash: str) -> bool:
+        """True if this Passage's ANNOTATION is cached and still valid
+        (its stored text hash matches, and it has a non-empty `lines`
+        array) — nothing about audio anymore.
+
+        Renamed from `is_passage_done` (2026-09-13, see ticket 07's
+        amendment): Lines no longer have their own individual audio files
+        — multiple Passages' Narrator Lines can now share one Chunk's
+        audio file (see `chunking.py`), so "every Line has an existing
+        audio file" no longer means anything at the Passage level. Audio
+        caching now lives one layer up, at the Chunk level, and is purely
+        content-hash-addressed (a Chunk's audio_path already encodes
+        everything that determines its content) rather than tracked here —
+        main.py checks chunk audio existence directly with `os.path.exists`
+        instead of asking the Checkpoint about it."""
         entry = self.get_entry(chapter_number, passage_index)
         if entry is None or entry.get("text_hash") != text_hash:
             return False
         lines = entry.get("annotation", {}).get("lines", [])
-        if not lines:
-            return False
-        return all(l.get("audio_path") and os.path.exists(l["audio_path"]) for l in lines)
+        return bool(lines)
 
     def set_entry(
         self,

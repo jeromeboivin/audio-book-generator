@@ -57,10 +57,25 @@ def _has_dialogue_line(raw_text: str) -> bool:
 
 
 def _iter_body_elements(soup: BeautifulSoup):
+    """Yields every element that can plausibly participate in a chapter's
+    structure: any heading level (h1-h6) plus paragraphs.
+
+    Only h2 (chapter number) + h3 (title) are ever consulted as the
+    chapter-boundary pair (see `extract_chapter`). Every OTHER heading
+    level is yielded here purely so it becomes ordinary passage-like
+    content within a chapter's body instead of being invisible to the
+    whole pipeline — see ticket 04's 2026-09-13 amendment (non-title
+    headings must be narrated, not silently dropped). The real test EPUB
+    (`samples/Les misérables Tome I Fantine.epub`) was checked directly:
+    it uses h1 (title-page only, e.g. "Les Misérables" / "Victor Hugo",
+    entirely outside any chapter boundary), h2, and h3 — no h4/h5/h6 occur
+    anywhere in the file. h1/h4/h5/h6 are included here anyway so this
+    stays correct for headings this book doesn't happen to use, rather
+    than encoding "only ever h2/h3" as an assumption."""
     body = soup.find("body")
     if body is None:
         return
-    for el in body.find_all(["h2", "h3", "p"]):
+    for el in body.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"]):
         yield el
 
 
@@ -101,10 +116,23 @@ def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
         else len(elements)
     )
 
+    # Every element in this slice other than the two boundary-defining
+    # elements themselves (already excluded by starting at start_idx + 2)
+    # is treated uniformly as passage-like content — a <p> and any other
+    # heading level (e.g. a subtitle or epigraph heading between this
+    # chapter's title and its first paragraph, or a "Livre N" heading that
+    # sometimes trails a chapter's last paragraph in the real test EPUB —
+    # see ticket 04's amendment) get the exact same treatment: `.get_text()`,
+    # the same whitespace normalization, and the same has_dialogue check. No
+    # special-casing by tag name here is intentional — nothing should be
+    # silently skipped just because it isn't a <p>. `end_idx` already stops
+    # before the next real chapter boundary's own <h2>+<h3> pair, so this
+    # can't accidentally swallow the start of the next chapter (verified
+    # against the real EPUB: every one of its 70 chapter boundaries is an
+    # <h2> matching "Chapitre \\w+" immediately followed by an <h3>, and
+    # `end_idx` is exactly that next boundary's index).
     passages = []
     for el in elements[start_idx + 2 : end_idx]:
-        if el.name != "p":
-            continue
         raw_text = el.get_text()
         text = _normalize(raw_text)
         if text:

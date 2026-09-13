@@ -1,15 +1,14 @@
 import argparse
-import glob
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from audiobook import annotation, assembly, synthesis
-from audiobook.cast import Cast
+from audiobook import annotation, assembly, chunking, synthesis
+from audiobook.cast import NARRATOR_VOICE, Cast
 from audiobook.checkpoint import Checkpoint, hash_passage
+from audiobook.chunking import AnnotatedLine
 from audiobook.parsing import Passage, extract_chapter
 from audiobook.synthesis import SynthesisJob
 
@@ -22,21 +21,6 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 BOOK_SLUG = "fantine_tome1"
 
 DEFAULT_WORKERS = 2
-
-
-def line_audio_path(chapter_number: int, passage_index: int, line_index: int) -> str:
-    d = os.path.join(AUDIO_CACHE_DIR, f"chapter_{chapter_number:02d}")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"passage_{passage_index:03d}_line_{line_index:02d}.wav")
-
-
-def _clear_stale_audio(chapter_number: int, from_passage_index: int) -> None:
-    d = os.path.join(AUDIO_CACHE_DIR, f"chapter_{chapter_number:02d}")
-    for path in glob.glob(os.path.join(d, "passage_*_line_*.wav")):
-        base = os.path.basename(path)
-        idx = int(base.split("_")[1])
-        if idx >= from_passage_index:
-            os.remove(path)
 
 
 def _build_narration_passages(chapter) -> list[Passage]:
@@ -67,39 +51,32 @@ def _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending, ov
     return roster, cast
 
 
-@dataclass
-class _PendingPassage:
-    """A passage that has been annotated (Phase 1) but whose Lines' audio
-    hasn't all been synthesized yet (Phase 2). Everything needed to write
-    this passage's checkpoint entry is captured here up front; the entry
-    itself is only written once `remaining` drops to zero."""
+def _resolve_line(line: dict, cast: Cast) -> AnnotatedLine:
+    """Turns one raw annotation Line dict (as returned by an Annotation
+    Pass call, a Narrator short-circuit, or restored verbatim from a
+    checkpointed Passage) into an AnnotatedLine ready for chunk-building —
+    i.e. resolves its Cast-assigned Voice. `cast.voice_for` is an idempotent
+    lookup for an already-assigned Speaker, so calling this on a restored
+    (already-checkpointed) Passage's lines against the Cast snapshot from
+    that same point in the run is safe and deterministic."""
+    if line["is_narrator"]:
+        return AnnotatedLine(text=line["text"], is_narrator=True, voice=NARRATOR_VOICE, instruct=None)
+    voice = cast.voice_for(line["speaker"], line["speaker_gender"], line["speaker_is_child"])
+    return AnnotatedLine(text=line["text"], is_narrator=False, voice=voice, instruct=line.get("instruct"))
 
-    text_hash: str
-    annotation: dict
-    roster_snapshot: list
-    cast_snapshot: dict
-    total_lines: int
-    remaining: int = 0
 
+def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, checkpoint, roster, cast):
+    """Sequential pass, unchanged in spirit from before the Chunk-layer
+    refactor: skip already-annotated passages (restoring roster/cast),
+    otherwise annotate-or-short-circuit + assign each Line's Voice via
+    Cast, exactly as before. Checkpoints each Passage's annotation
+    immediately once it's done — no longer waits on audio synthesis, since
+    audio caching moved one layer up to Chunks (see ticket 07's
+    2026-09-13 amendment) and is no longer a Passage-level concern at all.
 
-def _phase1_annotate_and_assign_voices(
-    passages,
-    chapter_number,
-    n_passages,
-    checkpoint,
-    roster,
-    cast,
-    overrides,
-    first_pending,
-    skip_tts,
-):
-    """Sequential pass: skip already-done passages (restoring roster/cast),
-    otherwise annotate + assign Voices exactly as before. Does NOT
-    synthesize audio. Returns (pending_passages, jobs) where pending_passages
-    maps passage_index -> _PendingPassage for passages awaiting synthesis,
-    and jobs is the flat list of SynthesisJob to run in Phase 2. In
-    --skip-tts mode, jobs is always [] and passages are checkpointed
-    immediately (no audio to wait for), matching prior behavior.
+    Returns the Chapter's full ordered list of AnnotatedLine (whether
+    restored from checkpoint or freshly annotated this run) — this is what
+    `chunking.build_chunks` consumes to produce Chunks.
 
     `passages` is the full narration list (title at index 0, body Passages
     after — see `_build_narration_passages`); each is a `parsing.Passage`
@@ -108,17 +85,19 @@ def _phase1_annotate_and_assign_voices(
     Line — not any re-check of the (already whitespace-collapsed) text.
     """
     client = None
-    pending_passages: dict[int, _PendingPassage] = {}
-    jobs: list[SynthesisJob] = []
+    all_lines: list[AnnotatedLine] = []
 
     for idx, passage in enumerate(passages):
         passage_text = passage.text
         h = hash_passage(passage_text)
-        if checkpoint.is_passage_done(chapter_number, idx, h):
-            print(f"Passage {idx + 1}/{n_passages}: already done, skipping")
+
+        if checkpoint.is_passage_annotated(chapter_number, idx, h):
+            print(f"Passage {idx + 1}/{n_passages}: already annotated, skipping")
             entry = checkpoint.get_entry(chapter_number, idx)
             roster = list(entry.get("roster", roster))
-            cast = Cast.from_snapshot(entry.get("cast", {}), overrides)
+            cast = Cast.from_snapshot(entry.get("cast", {}), cast.overrides)
+            for line in entry["annotation"]["lines"]:
+                all_lines.append(_resolve_line(line, cast))
             continue
 
         if passage.has_dialogue:
@@ -130,85 +109,63 @@ def _phase1_annotate_and_assign_voices(
             result = annotation.short_circuit_narrator(passage_text)
 
         annotation.update_roster(roster, result["lines"])
+        for line in result["lines"]:
+            all_lines.append(_resolve_line(line, cast))
 
-        passage_jobs: list[SynthesisJob] = []
-        for l_idx, line in enumerate(result["lines"]):
-            audio_path = line_audio_path(chapter_number, idx, l_idx)
-            line["audio_path"] = audio_path
-            if skip_tts or os.path.exists(audio_path):
-                continue
-            if line["is_narrator"]:
-                voice = "Uncle_Fu"
-                instruct = None
-            else:
-                voice = cast.voice_for(line["speaker"], line["speaker_gender"], line["speaker_is_child"])
-                instruct = line.get("instruct")
-            passage_jobs.append(
-                SynthesisJob(
-                    chapter_number=chapter_number,
-                    passage_index=idx,
-                    line_index=l_idx,
-                    text=line["text"],
-                    voice=voice,
-                    instruct=instruct,
-                    audio_path=audio_path,
-                    is_narrator=line["is_narrator"],
-                )
+        checkpoint.set_entry(chapter_number, idx, h, result, list(roster), cast.to_snapshot())
+        print(f"Passage {idx + 1}/{n_passages}: annotated ({len(result['lines'])} lines)")
+
+    return all_lines
+
+
+def _phase2_synthesize_chunks(chapter_number, chunks, workers):
+    """Parallel pass: builds one SynthesisJob per Chunk whose audio file
+    doesn't already exist on disk (content-hash-addressed — see
+    `chunking.py` — so this is a plain `os.path.exists` check, no
+    Checkpoint involvement at all), then synthesizes them across worker
+    processes. Chunks are independent of each other (unlike the old
+    per-Line jobs, nothing here needs to track "all of this Passage's
+    Lines are done" — each Chunk's audio file existing IS it being done).
+
+    Deliberately does not create any directory itself: each Chunk's
+    `audio_path` was already computed by `chunking.build_chunks` against
+    whatever `audio_cache_dir` the caller passed it (not necessarily this
+    module's own `AUDIO_CACHE_DIR` constant — e.g. a test harness may use
+    an isolated directory), and `synthesis.run_job` already creates
+    `os.path.dirname(job.audio_path)` itself before writing. Deriving a
+    directory from the module-level constant here instead would silently
+    create the wrong (or an extra, unused) directory whenever chunks were
+    built against a different audio_cache_dir."""
+    jobs: list[SynthesisJob] = []
+    for i, c in enumerate(chunks):
+        if os.path.exists(c.audio_path):
+            continue
+        jobs.append(
+            SynthesisJob(
+                chapter_number=chapter_number,
+                chunk_index=i,
+                text=c.text,
+                voice=c.voice,
+                instruct=c.instruct,
+                audio_path=c.audio_path,
+                is_narrator=c.is_narrator,
             )
+        )
 
-        if skip_tts:
-            # No synthesis will ever happen this run; checkpoint immediately,
-            # same as before the parallel-synthesis refactor.
-            checkpoint.set_entry(chapter_number, idx, h, result, list(roster), cast.to_snapshot())
-            print(f"Passage {idx + 1}/{n_passages} done ({len(result['lines'])} lines)")
-        else:
-            pending_passages[idx] = _PendingPassage(
-                text_hash=h,
-                annotation=result,
-                roster_snapshot=list(roster),
-                cast_snapshot=cast.to_snapshot(),
-                total_lines=len(result["lines"]),
-                remaining=len(passage_jobs),
-            )
-            jobs.extend(passage_jobs)
-            print(
-                f"Passage {idx + 1}/{n_passages}: annotated, "
-                f"{len(passage_jobs)}/{len(result['lines'])} lines queued for synthesis"
-            )
-
-    return pending_passages, jobs
-
-
-def _phase2_synthesize_parallel(chapter_number, n_passages, checkpoint, pending_passages, jobs, workers):
-    """Parallel pass: synthesize every queued Line's audio across worker
-    processes, and checkpoint each passage the moment ALL of its Lines are
-    done (which may happen in any passage order). Only this (main) process
-    ever touches the Checkpoint/JSON file."""
-
-    # Passages that already had every Line's audio on disk need no worker at
-    # all — checkpoint them immediately.
-    for idx in list(pending_passages.keys()):
-        pp = pending_passages[idx]
-        if pp.remaining == 0:
-            checkpoint.set_entry(chapter_number, idx, pp.text_hash, pp.annotation, pp.roster_snapshot, pp.cast_snapshot)
-            print(f"Passage {idx + 1}/{n_passages} done ({pp.total_lines} lines, already cached)")
-            del pending_passages[idx]
-
+    total_chunks = len(chunks)
     if not jobs:
-        print("No audio synthesis needed (all pending passages already had cached audio).")
+        print(f"No audio synthesis needed (all {total_chunks} chunk(s) already cached).")
         return
 
     total_jobs = len(jobs)
-    total_pending_passages = len(pending_passages)
     threads_per_worker = synthesis.default_threads_per_worker(workers)
     print(
         f"Starting {workers} worker process(es) (each loading its own Qwen3-TTS model copy, "
-        f"{threads_per_worker} torch thread(s) each) for {total_jobs} synthesis job(s) "
-        f"across {total_pending_passages} passage(s) ..."
+        f"{threads_per_worker} torch thread(s) each) for {total_jobs}/{total_chunks} chunk(s) "
+        f"needing synthesis ..."
     )
 
-    completed_jobs = 0
-    completed_passages = 0
+    completed = 0
     with ProcessPoolExecutor(
         max_workers=workers,
         initializer=synthesis.init_worker,
@@ -222,29 +179,13 @@ def _phase2_synthesize_parallel(chapter_number, n_passages, checkpoint, pending_
                     future.result()
                 except Exception as e:
                     raise RuntimeError(
-                        f"Synthesis failed for chapter {job.chapter_number} passage "
-                        f"{job.passage_index} line {job.line_index} (aborting run; "
-                        f"already-checkpointed passages remain valid, rerun to resume): {e}"
+                        f"Synthesis failed for chapter {job.chapter_number} chunk "
+                        f"{job.chunk_index} (aborting run; already-synthesized chunk "
+                        f"audio files remain valid, rerun to resume): {e}"
                     ) from e
 
-                completed_jobs += 1
-                pp = pending_passages[job.passage_index]
-                pp.remaining -= 1
-                if pp.remaining == 0:
-                    checkpoint.set_entry(
-                        chapter_number,
-                        job.passage_index,
-                        pp.text_hash,
-                        pp.annotation,
-                        pp.roster_snapshot,
-                        pp.cast_snapshot,
-                    )
-                    completed_passages += 1
-                    print(
-                        f"Passage {job.passage_index + 1}/{n_passages} done ({pp.total_lines} lines) "
-                        f"— {completed_passages}/{total_pending_passages} passages complete, "
-                        f"{completed_jobs}/{total_jobs} lines synthesized"
-                    )
+                completed += 1
+                print(f"Chunk {job.chunk_index + 1}/{total_chunks} synthesized ({completed}/{total_jobs}) -> {job.audio_path}")
         except Exception:
             # Let already-running jobs finish (can't preempt a running
             # process), but don't start any more that were merely queued.
@@ -270,7 +211,7 @@ def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: in
     first_pending = None
     for idx, passage in enumerate(passages):
         h = hash_passage(passage.text)
-        if not checkpoint.is_passage_done(chapter_number, idx, h):
+        if not checkpoint.is_passage_annotated(chapter_number, idx, h):
             first_pending = idx
             break
 
@@ -278,39 +219,42 @@ def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: in
         # A stale/invalidated passage invalidates every checkpoint entry after it too:
         # the roster/cast snapshots from here on were built on top of it, so they can't
         # be trusted (ticket 07's sequential-roster requirement). Runs once here, before
-        # Phase 1 begins — not per-worker, and unaffected by parallel synthesis below.
+        # Phase 1 begins. Note: unlike before the Chunk-layer refactor, there is no
+        # separate stale-audio-file cleanup step here anymore (see ticket 07's amendment
+        # on why `_clear_stale_audio` was removed) — a re-annotated Passage naturally
+        # produces Lines whose merged Chunk(s) hash differently, so any old Chunk audio
+        # file is simply orphaned on disk, never collided with or mistakenly reused.
         checkpoint.invalidate_from(chapter_number, first_pending)
-        _clear_stale_audio(chapter_number, first_pending)
 
     roster, cast = _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending, overrides)
     if first_pending is None:
-        print("All passages already checkpointed — nothing to annotate or synthesize.")
+        print("All passages already annotated — nothing to (re-)annotate.")
     elif first_pending == 0:
         print("Starting fresh (no prior checkpoint progress).")
     else:
         print(f"Resuming from passage {first_pending + 1}/{n_passages} (roster so far: {roster})")
 
-    # Phase 1 (sequential): annotate + assign Voices for every pending passage.
-    pending_passages, jobs = _phase1_annotate_and_assign_voices(
-        passages, chapter_number, n_passages, checkpoint, roster, cast, overrides, first_pending, skip_tts
-    )
+    # Phase 1 (sequential): annotate + assign Voices for every passage, and
+    # accumulate the Chapter's full ordered Line list.
+    all_lines = _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, checkpoint, roster, cast)
 
     if skip_tts:
-        print("skip_tts=True: not assembling final chapter WAV (no audio synthesized).")
+        print("skip_tts=True: not building chunks or assembling the final chapter WAV.")
         return None
 
-    # Phase 2 (parallel): synthesize every queued Line's audio across worker
-    # processes; checkpoint each passage as soon as all its Lines are done.
-    _phase2_synthesize_parallel(chapter_number, n_passages, checkpoint, pending_passages, jobs, workers)
+    # Chunk-building: a pure, deterministic function of the Chapter's full
+    # ordered Line list (see chunking.py). Merges consecutive Narrator
+    # Lines (even across Passage/heading boundaries) into single Chunks,
+    # breaking only at real dialogue Lines.
+    chunks = chunking.build_chunks(all_lines, AUDIO_CACHE_DIR, chapter_number)
+    print(f"Built {len(chunks)} chunk(s) from {len(all_lines)} line(s).")
 
-    print("Assembling chapter WAV from cached line audio ...")
-    passages_line_paths = []
-    for idx in range(n_passages):
-        entry = checkpoint.get_entry(chapter_number, idx)
-        lines = entry["annotation"]["lines"] if entry else []
-        passages_line_paths.append([l["audio_path"] for l in lines])
+    # Phase 2 (parallel): synthesize every Chunk whose audio isn't already
+    # cached, across worker processes.
+    _phase2_synthesize_chunks(chapter_number, chunks, workers)
 
-    out_path = assembly.assemble_chapter(passages_line_paths, chapter_number, chapter.title, OUTPUT_DIR)
+    print("Assembling chapter WAV from chunk audio ...")
+    out_path = assembly.assemble_chapter([c.audio_path for c in chunks], chapter_number, chapter.title, OUTPUT_DIR)
     print(f"Wrote {out_path}")
     return out_path
 

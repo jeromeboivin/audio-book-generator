@@ -37,6 +37,19 @@ of scope — Preset Voices only.
 - **Annotation Pass**: one OpenAI call over a Passage, returning a structured
   breakdown into Lines — Narrator Lines passed through as-is, dialogue Lines
   each tagged with a Speaker and an Instruct String.
+- **Chunk** *(added 2026-09-13, see [Design chunking and audio
+  assembly](../.scratch/audiobook-prototype/issues/06-chunking-and-assembly.md)'s
+  amendment)*: the actual unit sent to TTS synthesis — either a single
+  dialogue Line, or a run of consecutive Narrator Lines (possibly spanning
+  multiple Passages, and even the chapter-title/heading boundary) merged
+  into one `generate_custom_voice` call. A downstream, separate concept
+  from Passage and Line, not a redefinition of either: a Passage is still
+  one source paragraph (or, since the same amendment, one other heading
+  element within a chapter's body); a Line is still one Speaker's
+  contiguous text within a Passage, from the Annotation Pass. Chunks are
+  built once per Chapter, after every Passage has been annotated, by
+  walking the Chapter's full ordered Line list and merging consecutive
+  `is_narrator=true` Lines together, breaking only at a dialogue Line.
 
 ## Notes
 

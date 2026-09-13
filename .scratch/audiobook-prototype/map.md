@@ -104,7 +104,14 @@ out to be a full tome (see [Pick the test book](issues/02-pick-test-book.md)).
   Pass call), and `Chapter.passages` is now `list[Passage]` carrying a
   `has_dialogue` flag computed from the raw pre-collapse text (fixes
   embedded/mid-paragraph dialogue being invisible to the old
-  passage-start-only em-dash check).
+  passage-start-only em-dash check). **Amended 2026-09-13**: any heading
+  level other than the `<h2>`+`<h3>` chapter-boundary pair (`h1`, `h4`-`h6`
+  handled generally; the real book only ever uses `h1` — outside any
+  chapter — plus `h2`/`h3`) is now treated as passage-like content, same as
+  a `<p>` — fixes non-title headings (e.g. a "Livre N" section heading
+  found trailing 8 of the book's other 69 chapters) being silently dropped
+  with zero trace. Chapter 1 itself is unaffected (still 16 body passages,
+  963 words) since it has no such headings.
 - [Design the Cast](issues/05-design-cast.md): fixed Narrator=Uncle_Fu +
   gender-partitioned 4-Voice character pool (male: Ryan, Aiden; female:
   Serena, Vivian) from the 9 Qwen3-TTS presets — **male/female voice
@@ -118,12 +125,34 @@ out to be a full tome (see [Pick the test book](issues/02-pick-test-book.md)).
   Chapter's longest paragraph, 332 words); numpy-silence-padded
   concatenation (~300-400ms between Lines, ~600-800ms between Passages);
   WAV output at Qwen3-TTS's confirmed native 24000 Hz, one file per
-  Chapter.
+  Chapter. **Amended 2026-09-13**: introduced the **Chunk** concept (see
+  [CONTEXT.md](../../CONTEXT.md)) — the actual synthesis unit is no longer
+  one call per Line, but consecutive Narrator Lines (even across
+  Passage/heading/title boundaries) merged into one call, breaking only at
+  a dialogue Line; model routing (0.6B/1.7B) moves to per-Chunk; the old
+  two-tier silence rule collapses to a single ~600-800ms gap between every
+  pair of Chunks (`assembly.CHUNK_GAP_S`); Chunk audio files are now
+  content-hash-addressed (`chunk_<hash>.wav`, hash over text+voice+
+  instruct+is_narrator) instead of passage/line-indexed.
 - [Design resumability / checkpointing](issues/07-resumability.md): single
   JSON manifest per Book, keyed by (chapter, passage index) + a content
   hash to detect source changes; caches both the Annotation Pass result
   and each Line's synthesized audio path; also snapshots the running
   Speaker roster per Passage so a resumed run doesn't need to re-derive it.
+  **Amended 2026-09-13**: the annotation checkpoint (this ticket's original
+  design) is unchanged; `is_passage_done` renamed `is_passage_annotated`
+  and now checks annotation validity only (no more per-Line audio-file
+  existence check, since Lines no longer have individual audio files after
+  ticket 06's Chunk amendment). Chunk audio caching is deliberately NOT
+  persisted anywhere — it's purely content-hash-addressed and
+  reconstructed identically every run by the same pure `build_chunks`
+  function, so a resumed run naturally finds and skips already-synthesized
+  Chunk files with no separate manifest; `_clear_stale_audio` was removed
+  (content-hash files can't collide with stale ones — an orphaned old file
+  is harmless). Accepted inefficiency: re-annotating a Passage can force a
+  full resynthesis of the newly-extended Chunk it now belongs to, including
+  content that was already synthesized before — not engineered around, per
+  this project's existing resumability-over-efficiency philosophy.
   This is what makes ticket 03's "abort the whole run on failure" decision
   safe — nothing already done is lost.
 

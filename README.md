@@ -14,7 +14,7 @@ a proof of concept before attempting a full-length novel.
 EPUB
   │  ebooklib + BeautifulSoup — chapter-boundary detection, whitespace normalization
   ▼
-Chapter (title + ordered Passages, one per source paragraph)
+Chapter (title + ordered Passages, one per source paragraph or non-title heading)
   │  em-dash-prefixed lines flagged as dialogue-bearing (checked before whitespace
   │  collapse, so dialogue that opens on a wrapped source line isn't missed)
   ▼
@@ -25,12 +25,15 @@ Lines (speaker, gender, child-or-not, one-sentence tone instruction for dialogue
   │  Cast: persistent Speaker → Voice mapping, gender/child-partitioned voice pools,
   │  manual override via cast.json
   ▼
-TTS synthesis (Qwen3-TTS)
-  │  Narrator Lines  → 0.6B-CustomVoice, no tone parameter
-  │  Dialogue Lines  → 1.7B-CustomVoice, one-sentence OpenAI-generated instruct string
+Chunks (consecutive Narrator Lines merged across Passages into one call each;
+  │  each dialogue Line is its own Chunk) — content-hash-addressed audio caching
+  ▼
+TTS synthesis (Qwen3-TTS), one call per Chunk
+  │  Narrator Chunks  → 0.6B-CustomVoice, no tone parameter
+  │  Dialogue Chunks  → 1.7B-CustomVoice, one-sentence OpenAI-generated instruct string
   │  GPU auto-detected (CUDA + best-effort flash-attention); CPU float32 fallback
   ▼
-Assembly (silence-padded concatenation) → output/chapitre_NN_<title>.wav
+Assembly (silence-padded concatenation between Chunks) → output/chapitre_NN_<title>.wav
 ```
 
 Every step is checkpointed to a JSON manifest keyed by chapter/passage/content-hash, so
@@ -84,11 +87,14 @@ python src/audiobook/main.py --chapter 1 --workers 2
 | `--workers N` | `2` | Parallel TTS worker processes |
 | `--skip-tts` | off | Parse + annotate only, no synthesis (useful to sanity-check annotation cost/output before committing to a full run) |
 
-Output lands in `output/`; per-line audio is cached in `audio_cache/`; run state is in
-`checkpoints/`. Re-running the same command resumes automatically — already-completed
-passages are skipped entirely, and editing the source book only invalidates the
-passages affected (and everything sequentially after them in that chapter, since
-character-roster tracking depends on processing order).
+Output lands in `output/`; per-chunk audio is cached in `audio_cache/` (content-hash
+addressed — a chunk is a run of merged consecutive Narrator lines, or one dialogue line);
+run state is in `checkpoints/` (annotation only). Re-running the same command resumes
+automatically — already-annotated passages are skipped, and editing the source book only
+invalidates the passages affected (and everything sequentially after them in that
+chapter, since character-roster tracking depends on processing order); already-cached
+chunk audio is skipped independently, since it's addressed by content hash rather than
+passage position.
 
 ### Overriding voice casting
 
@@ -117,5 +123,6 @@ This is a proof of concept, not a general-purpose tool:
   title heading pair — a different EPUB's structure may need new parsing logic
   (see the design notes on the real target book, *L'Autre Moi*, which needs exactly that)
   before this pipeline could handle it
-- Batched TTS calls (multiple lines per model invocation) were deliberately deferred in
-  favor of one call per line, for simplicity
+- Synthesis batching is per-chunk (consecutive narrator lines merged, one call each;
+  each dialogue line always its own call) — batching multiple *dialogue* lines from the
+  same speaker together was deliberately deferred, for simplicity
