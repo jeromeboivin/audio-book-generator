@@ -77,22 +77,21 @@ The first real run downloads both TTS models (~7 GB total) into `HF_HOME` — th
 happens once. Pass `--gpu` to either setup script if you have a supported NVIDIA GPU and
 want the CUDA-enabled build of PyTorch instead of the default CPU-only one.
 
-Point `--book` at your own EPUB — there's no bundled test book in the repo (the default
-path, used if you omit `--book`, assumes you've placed one at
-`samples/Les misérables Tome I Fantine.epub`). For a quick trial, grab a *Les Misérables*
-Tome I EPUB (public domain, e.g. from Project Gutenberg), which matches the "Chapitre N"
-heading convention this pipeline was built against; a different book's heading structure
-may need new parsing logic (see [Scope and limitations](#scope-and-limitations)).
+`--book` is required and points at your own EPUB — there's no bundled test book in the
+repo. For a quick trial, grab a *Les Misérables* Tome I EPUB (public domain, e.g. from
+Project Gutenberg), which matches the "Chapitre N" heading convention this pipeline was
+built against; a different book's heading structure may need new parsing logic (see
+[Scope and limitations](#scope-and-limitations)).
 
 ## Usage
 
 ```bash
-python src/audiobook/main.py --chapter 1 --workers 2
+python src/audiobook/main.py --book /path/to/your-book.epub --chapter 1 --workers 2
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--book PATH` | `samples/Les misérables Tome I Fantine.epub` | EPUB to narrate |
+| `--book PATH` | *(required)* | EPUB to narrate |
 | `--chapter N` | `1` | Chapter number to synthesize (1-indexed) |
 | `--workers N` | `2` | Parallel TTS worker processes |
 | `--skip-tts` | off | Parse + annotate only, no synthesis (useful to sanity-check annotation cost/output before committing to a full run) |

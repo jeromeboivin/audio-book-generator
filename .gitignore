@@ -8,7 +8,5 @@ checkpoints/
 audio_cache/
 output/
 
-samples/*.epub
-
 cast.json
 voices.json

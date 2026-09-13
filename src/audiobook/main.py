@@ -14,7 +14,6 @@ from audiobook.parsing import Passage, extract_chapter
 from audiobook.synthesis import SynthesisJob
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_BOOK = os.path.join(PROJECT_ROOT, "samples", "Les misérables Tome I Fantine.epub")
 CAST_JSON_PATH = os.path.join(PROJECT_ROOT, "cast.json")
 VOICES_JSON_PATH = os.path.join(PROJECT_ROOT, "voices.json")
 CHECKPOINT_DIR = os.path.join(PROJECT_ROOT, "checkpoints")
@@ -313,7 +312,7 @@ def run(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--book", default=DEFAULT_BOOK)
+    parser.add_argument("--book", required=True, help="path to the EPUB file to narrate")
     parser.add_argument("--chapter", type=int, default=1)
     parser.add_argument("--skip-tts", action="store_true", help="parse+annotate only, no synthesis")
     parser.add_argument(
