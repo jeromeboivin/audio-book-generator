@@ -2,16 +2,20 @@
 
 ## Destination
 
-A working prototype: given one full short French public-domain Book (EPUB or
-raw text), produce one audio file per Chapter, narrated with distinct Voices
-per Speaker and audible emotional variation in dialogue. TTS synthesis runs
-entirely locally on CPU; the OpenAI API is the only network dependency
-(used for dialogue annotation only). CLI/script, no UI. Voice cloning is out
-of scope — Preset Voices only.
+Given a French EPUB, produce one audio file per Chapter (one Chapter per run),
+narrated with distinct Voices per Speaker and audible emotional variation in
+dialogue. TTS synthesis runs entirely locally (CPU or GPU); the OpenAI API is
+the only network dependency (used for dialogue annotation only). CLI/script,
+no UI. Voice cloning is out of scope — Preset Voices only. See
+[README.md](README.md) for setup and usage, and its "Scope and limitations"
+section for the real constraints on what kind of EPUB this works against
+today.
 
 ## Glossary
 
-- **Book**: the input work, supplied as an EPUB file or raw text.
+- **Book**: the input work, supplied as an EPUB file (raw-text input was
+  considered early on but was never built — EPUB is the only supported
+  format).
 - **Chapter**: a top-level division of a Book. The unit of output: one audio
   file is produced per Chapter.
 - **Passage**: one paragraph of a Chapter's text — the unit sent to OpenAI in

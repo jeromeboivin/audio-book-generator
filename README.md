@@ -1,12 +1,9 @@
 # Audiobook Generator
 
-A CLI prototype that turns a French EPUB into a narrated audiobook: one WAV file per
-chapter, narrator and characters in distinct voices, dialogue spoken with emotion. TTS
-synthesis runs entirely locally; OpenAI is used only to annotate dialogue (who's
-speaking, their gender, and the tone to speak it with).
-
-Currently scoped to one chapter of one test book (see [Scope](#scope-and-limitations)) as
-a proof of concept before attempting a full-length novel.
+A CLI toolkit that turns a French EPUB into a narrated audiobook, one chapter at a time:
+narrator and characters in distinct voices, dialogue spoken with emotion. TTS synthesis
+runs entirely locally; OpenAI is used only to annotate dialogue (who's speaking, their
+gender, and the tone to speak it with).
 
 ## How it works
 
@@ -18,8 +15,8 @@ Chapter (title + ordered Passages, one per source paragraph or non-title heading
   │  em-dash-prefixed lines flagged as dialogue-bearing (checked before whitespace
   │  collapse, so dialogue that opens on a wrapped source line isn't missed)
   ▼
-Annotation Pass (OpenAI, gpt-4o, structured outputs — skipped for pure-narration
-  │  Passages, which short-circuit straight to a Narrator Line at zero cost)
+Annotation Pass (OpenAI, structured outputs — skipped for pure-narration Passages,
+  │  which short-circuit straight to a Narrator Line at zero cost)
   ▼
 Lines (speaker, gender, child-or-not, one-sentence tone instruction for dialogue)
   │  Cast: stateless role lookup (narrator/adult_male/adult_female/child) → Voice,
@@ -39,6 +36,9 @@ Assembly (silence-padded concatenation between Chunks) → output/chapitre_NN_<t
 Every step is checkpointed to a JSON manifest keyed by chapter/passage/content-hash, so
 an interrupted run resumes from where it left off instead of re-annotating or
 re-synthesizing anything already done.
+
+See [CONTEXT.md](CONTEXT.md) for precise definitions of the terms above (Book, Chapter,
+Passage, Line, Voice, Cast, Chunk, ...).
 
 ## Requirements
 
@@ -152,8 +152,6 @@ To pin one specific named character to a specific voice regardless of its role, 
 includes overriding "Narrator" itself, if you want).
 
 ## Scope and limitations
-
-This is a proof of concept, not a general-purpose tool:
 
 - **French only**, EPUB input only (no raw text, no other languages)
 - **One chapter at a time** — no whole-book batch mode yet
