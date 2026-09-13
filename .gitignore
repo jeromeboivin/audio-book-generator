@@ -1,0 +1,11 @@
+.venv-qwen-test/
+__pycache__/
+*.pyc
+
+checkpoints/
+audio_cache/
+output/
+
+samples/*.epub
+
+cast.json

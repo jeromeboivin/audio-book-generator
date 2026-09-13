@@ -1,0 +1,7 @@
+torch
+qwen-tts
+soundfile
+numpy
+ebooklib
+beautifulsoup4
+openai

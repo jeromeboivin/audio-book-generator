@@ -1,0 +1,44 @@
+# Context: Audiobook Generator
+
+## Destination
+
+A working prototype: given one full short French public-domain Book (EPUB or
+raw text), produce one audio file per Chapter, narrated with distinct Voices
+per Speaker and audible emotional variation in dialogue. TTS synthesis runs
+entirely locally on CPU; the OpenAI API is the only network dependency
+(used for dialogue annotation only). CLI/script, no UI. Voice cloning is out
+of scope — Preset Voices only.
+
+## Glossary
+
+- **Book**: the input work, supplied as an EPUB file or raw text.
+- **Chapter**: a top-level division of a Book. The unit of output: one audio
+  file is produced per Chapter.
+- **Passage**: one paragraph of a Chapter's text — the unit sent to OpenAI in
+  a single annotation call. A Passage may be pure narration, pure dialogue,
+  or a mix (e.g. a line of dialogue with an attribution tag like "said Marie").
+- **Speaker**: whoever a piece of text is attributed to. The Narrator is a
+  Speaker like any other character Speaker — every Line has exactly one
+  Speaker. Narrator Lines skip the OpenAI annotation step (see Line); the
+  Narrator's Voice is fixed and pre-assigned rather than inferred.
+- **Line**: one Speaker's contiguous piece of text within a Passage, after
+  narration/dialogue splitting. A Narrator Line is passed straight to
+  synthesis unchanged. A dialogue Line (any non-Narrator Speaker) carries a
+  generated Instruct String.
+- **Instruct String**: the natural-language tone/emotion directive OpenAI
+  generates for a dialogue Line (e.g. "speak with hesitant relief"), passed
+  to the TTS engine alongside the Line's text. Narrator Lines never have one.
+- **Voice**: a concrete TTS-engine voice (one of its Preset Voices) that can
+  be assigned to a Speaker.
+- **Cast**: the persistent Speaker → Voice mapping for a Book, kept
+  consistent across every Chapter. Built automatically (LLM-inferred,
+  drawn from a small pool of 4-8 Voices) with a manual override file as an
+  escape hatch.
+- **Annotation Pass**: one OpenAI call over a Passage, returning a structured
+  breakdown into Lines — Narrator Lines passed through as-is, dialogue Lines
+  each tagged with a Speaker and an Instruct String.
+
+## Notes
+
+- No CONTEXT-MAP.md — single context, this is the whole project so far.
+- No code exists yet; this file precedes any implementation.
