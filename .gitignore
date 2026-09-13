@@ -1,4 +1,6 @@
+.venv/
 .venv-qwen-test/
+.hf/
 __pycache__/
 *.pyc
 

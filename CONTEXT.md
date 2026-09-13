@@ -30,9 +30,7 @@ of scope — Preset Voices only.
   to the TTS engine alongside the Line's text. Narrator Lines never have one.
 - **Voice**: a concrete TTS-engine voice (one of its Preset Voices) that can
   be assigned to a Speaker.
-- **Cast** *(redesigned 2026-09-13, see [Design the
-  Cast](../.scratch/audiobook-prototype/issues/05-design-cast.md)'s
-  amendment)*: a stateless, pure lookup from a Line's **role** — one of
+- **Cast** *(redesigned 2026-09-13)*: a stateless, pure lookup from a Line's **role** — one of
   `narrator` / `adult_male` / `adult_female` / `child`, derived from
   `is_narrator` + `speaker_gender` + `speaker_is_child` — to a Voice,
   via 4 fixed, configurable role-voices (`voices.json`, defaults
@@ -43,14 +41,12 @@ of scope — Preset Voices only.
   same role always resolves to the same Voice, in every Chapter of every
   Book, as long as the config doesn't change. This is what actually makes
   Cast consistent across Chapters (an earlier version of this entry
-  claimed cross-Chapter consistency the old pool/cycling design didn't
-  actually implement — see the ticket amendment for the full story).
+  claimed cross-Chapter consistency an older pool/cycling design didn't
+  actually implement).
 - **Annotation Pass**: one OpenAI call over a Passage, returning a structured
   breakdown into Lines — Narrator Lines passed through as-is, dialogue Lines
   each tagged with a Speaker and an Instruct String.
-- **Chunk** *(added 2026-09-13, see [Design chunking and audio
-  assembly](../.scratch/audiobook-prototype/issues/06-chunking-and-assembly.md)'s
-  amendment)*: the actual unit sent to TTS synthesis — either a single
+- **Chunk** *(added 2026-09-13)*: the actual unit sent to TTS synthesis — either a single
   dialogue Line, or a run of consecutive Narrator Lines (possibly spanning
   multiple Passages, and even the chapter-title/heading boundary) merged
   into one `generate_custom_voice` call. A downstream, separate concept
@@ -64,5 +60,6 @@ of scope — Preset Voices only.
 
 ## Notes
 
-- No CONTEXT-MAP.md — single context, this is the whole project so far.
-- No code exists yet; this file precedes any implementation.
+- No CONTEXT-MAP.md — single context, this is the whole project.
+- This is a working implementation, not just a spec — see `src/audiobook/`
+  and [README.md](README.md) for how to run it.

@@ -87,7 +87,9 @@ def _resolve_line(line: dict, cast: Cast) -> AnnotatedLine:
     )
 
 
-def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, checkpoint, roster, cast):
+def _phase1_annotate_and_assign_voices(
+    passages, chapter_number, n_passages, checkpoint, roster, cast, openai_model
+):
     """Sequential pass, unchanged in spirit from before the Chunk-layer
     refactor: skip already-annotated passages (restoring the roster; Cast
     needs no restoring at all anymore — see ticket 05's 2026-09-13
@@ -137,8 +139,8 @@ def _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, che
         if passage.has_dialogue:
             if client is None:
                 client = annotation.make_client()
-            print(f"Passage {idx + 1}/{n_passages}: annotating via OpenAI ({annotation.MODEL}) ...")
-            result = annotation.annotate_passage(client, passage_text, roster, prev_line_text)
+            print(f"Passage {idx + 1}/{n_passages}: annotating via OpenAI ({openai_model}) ...")
+            result = annotation.annotate_passage(client, passage_text, roster, prev_line_text, model=openai_model)
         else:
             result = annotation.short_circuit_narrator(passage_text)
 
@@ -228,7 +230,13 @@ def _phase2_synthesize_chunks(chapter_number, chunks, workers):
             raise
 
 
-def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: int = DEFAULT_WORKERS):
+def run(
+    book_path: str,
+    chapter_number: int,
+    skip_tts: bool = False,
+    workers: int = DEFAULT_WORKERS,
+    openai_model: str = annotation.DEFAULT_MODEL,
+):
     overrides = Cast.load_overrides(CAST_JSON_PATH)
     voice_config = load_voice_config(VOICES_JSON_PATH)
     # A single Cast instance for the entire run — Cast is stateless (a
@@ -278,7 +286,9 @@ def run(book_path: str, chapter_number: int, skip_tts: bool = False, workers: in
 
     # Phase 1 (sequential): annotate + assign Voices for every passage, and
     # accumulate the Chapter's full ordered Line list.
-    all_lines = _phase1_annotate_and_assign_voices(passages, chapter_number, n_passages, checkpoint, roster, cast)
+    all_lines = _phase1_annotate_and_assign_voices(
+        passages, chapter_number, n_passages, checkpoint, roster, cast, openai_model
+    )
 
     if skip_tts:
         print("skip_tts=True: not building chunks or assembling the final chapter WAV.")
@@ -312,10 +322,16 @@ def main():
         default=DEFAULT_WORKERS,
         help=f"number of parallel TTS worker processes (default {DEFAULT_WORKERS})",
     )
+    parser.add_argument(
+        "--openai-model",
+        default=os.environ.get("OPENAI_MODEL", annotation.DEFAULT_MODEL),
+        help=f"OpenAI model for the Annotation Pass (default {annotation.DEFAULT_MODEL}, "
+        "or set via the OPENAI_MODEL env var) — must support structured outputs (json_schema)",
+    )
     args = parser.parse_args()
     if args.workers < 1:
         parser.error("--workers must be >= 1")
-    run(args.book, args.chapter, skip_tts=args.skip_tts, workers=args.workers)
+    run(args.book, args.chapter, skip_tts=args.skip_tts, workers=args.workers, openai_model=args.openai_model)
 
 
 if __name__ == "__main__":

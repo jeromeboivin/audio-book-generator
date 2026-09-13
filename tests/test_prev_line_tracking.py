@@ -16,6 +16,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from audiobook import annotation
 from audiobook import main as m
 from audiobook.cast import Cast
 from audiobook.checkpoint import Checkpoint
@@ -59,7 +60,7 @@ SECOND_PASSAGE_LINES = {
 def test_preceding_line_is_last_line_not_whole_passage():
     captured_preceding_lines = []
 
-    def fake_annotate_passage(client, passage_text, roster, preceding_line=None):
+    def fake_annotate_passage(client, passage_text, roster, preceding_line=None, model=None):
         captured_preceding_lines.append(preceding_line)
         if passage_text == "PASSAGE_ONE":
             return FIRST_PASSAGE_LINES
@@ -77,7 +78,9 @@ def test_preceding_line_is_last_line_not_whole_passage():
         with mock.patch("audiobook.annotation.make_client", return_value=object()), mock.patch(
             "audiobook.annotation.annotate_passage", side_effect=fake_annotate_passage
         ):
-            m._phase1_annotate_and_assign_voices(passages, 1, len(passages), checkpoint, [], cast)
+            m._phase1_annotate_and_assign_voices(
+                passages, 1, len(passages), checkpoint, [], cast, annotation.DEFAULT_MODEL
+            )
 
     # First call (passage 0) has no predecessor.
     assert captured_preceding_lines[0] is None, captured_preceding_lines

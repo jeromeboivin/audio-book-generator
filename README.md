@@ -40,39 +40,47 @@ Every step is checkpointed to a JSON manifest keyed by chapter/passage/content-h
 an interrupted run resumes from where it left off instead of re-annotating or
 re-synthesizing anything already done.
 
-The full design record — why each of these decisions was made, what alternatives were
-considered, and what's still open — lives in
-[`.scratch/audiobook-prototype/`](.scratch/audiobook-prototype/map.md).
-
 ## Requirements
 
-- Python 3.12
+- Python 3.10+ (3.12 tested)
 - An OpenAI API key (dialogue annotation only — TTS itself never leaves the machine)
-- ~4-5 GB disk for the two Qwen3-TTS model weights (0.6B + 1.7B), downloaded on first run
+- ~7 GB disk for the two Qwen3-TTS model weights (0.6B ≈ 2.4 GB, 1.7B ≈ 4.3 GB),
+  downloaded automatically on first run
 - CPU-only works (validated at roughly 10x slower than real-time on an 8-core, 2016-era
   Xeon); a CUDA GPU is auto-detected and used instead when present, with
   [flash-attention](https://github.com/Dao-AILab/flash-attention) enabled automatically
   if that package is installed — this path is implemented per Qwen3-TTS's own docs but
   hasn't been exercised on real GPU hardware yet
 
-## Setup
+## Quickstart
 
 ```bash
-python3.12 -m venv .venv
+# Linux / macOS
+./setup.sh
 source .venv/bin/activate
-pip install -r requirements.txt
 
-# Optional, GPU only: enables flash-attention automatically when present
-pip install flash-attn
-
-export OPENAI_API_KEY=sk-...
-export HF_HOME=.hf   # or any writable directory — this is where model weights land
+# Windows (PowerShell)
+.\setup.ps1
+.venv\Scripts\Activate.ps1
 ```
 
-A test book isn't included in the repo (see [`samples/README.md`](samples/README.md)) —
-grab a *Les Misérables* Tome I EPUB (public domain, e.g. from Project Gutenberg) and
-place it at `samples/Les misérables Tome I Fantine.epub`, or point `--book` at any EPUB
-with the same "Chapitre N" heading convention.
+Then, in the activated environment:
+
+```bash
+export OPENAI_API_KEY=sk-...          # $env:OPENAI_API_KEY = "sk-..." on Windows
+export HF_HOME="$(pwd)/.hf"           # $env:HF_HOME = "$(Resolve-Path .hf)" on Windows
+
+python src/audiobook/main.py --chapter 1
+```
+
+The first real run downloads both TTS models (~7 GB total) into `HF_HOME` — this only
+happens once. Pass `--gpu` to either setup script if you have a supported NVIDIA GPU and
+want the CUDA-enabled build of PyTorch instead of the default CPU-only one.
+
+A test book isn't included in the repo — grab a *Les Misérables* Tome I EPUB (public
+domain, e.g. from Project Gutenberg) and place it at
+`samples/Les misérables Tome I Fantine.epub`, or point `--book` at any EPUB with the same
+"Chapitre N" heading convention.
 
 ## Usage
 
@@ -86,6 +94,7 @@ python src/audiobook/main.py --chapter 1 --workers 2
 | `--chapter N` | `1` | Chapter number to synthesize (1-indexed) |
 | `--workers N` | `2` | Parallel TTS worker processes |
 | `--skip-tts` | off | Parse + annotate only, no synthesis (useful to sanity-check annotation cost/output before committing to a full run) |
+| `--openai-model NAME` | `gpt-5.6-luna` (or `$OPENAI_MODEL` if set) | Model used for the Annotation Pass — must support structured outputs (`response_format={"type": "json_schema", ...}`) |
 
 Output lands in `output/`; per-chunk audio is cached in `audio_cache/` (content-hash
 addressed — a chunk is a run of merged consecutive Narrator lines, or one dialogue line);
@@ -150,9 +159,9 @@ This is a proof of concept, not a general-purpose tool:
 - **Voice cloning is out of scope** — only Qwen3-TTS's built-in preset voices are used,
   none of which are natively French (cross-lingual synthesis)
 - Chapter-boundary detection assumes a Gutenberg-style `<h2>`+`<h3>` "Chapitre N" /
-  title heading pair — a different EPUB's structure may need new parsing logic
-  (see the design notes on the real target book, *L'Autre Moi*, which needs exactly that)
-  before this pipeline could handle it
+  title heading pair — a different EPUB's structure (a different heading pattern, or
+  chapters already split one-per-file) would need new parsing logic before this
+  pipeline could handle it
 - Synthesis batching is per-chunk (consecutive narrator lines merged, one call each;
   each dialogue line always its own call) — batching multiple *dialogue* lines from the
   same speaker together was deliberately deferred, for simplicity

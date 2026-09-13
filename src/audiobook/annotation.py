@@ -3,7 +3,7 @@ import os
 
 from openai import OpenAI
 
-MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-5.6-luna"
 
 SCHEMA = {
     "name": "passage_lines",
@@ -126,11 +126,11 @@ def _build_user_message(passage_text: str, preceding_line: str | None) -> str:
 
 
 def _call_openai(
-    client: OpenAI, passage_text: str, roster: list[str], preceding_line: str | None
+    client: OpenAI, passage_text: str, roster: list[str], preceding_line: str | None, model: str
 ) -> dict:
     roster_str = ", ".join(roster) if roster else "(none yet)"
     resp = client.chat.completions.create(
-        model=MODEL,
+        model=model,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT.format(roster=roster_str)},
             {"role": "user", "content": _build_user_message(passage_text, preceding_line)},
@@ -159,6 +159,7 @@ def annotate_passage(
     passage_text: str,
     roster: list[str],
     preceding_line: str | None = None,
+    model: str = DEFAULT_MODEL,
 ) -> dict:
     """Runs the Annotation Pass (OpenAI call, retried once) for a Passage
     that's already been determined to need one (`passage.has_dialogue`,
@@ -175,11 +176,16 @@ def annotate_passage(
     that Passage itself had several Lines — only its last one is what's
     actually adjacent. This is situational context only: the model must not
     annotate it, only the Passage this call is actually about (see the
-    system prompt)."""
+    system prompt).
+
+    `model`: the OpenAI model id to use, configurable (see main.py's
+    `--openai-model` flag / `OPENAI_MODEL` env var) — defaults to
+    `DEFAULT_MODEL`. Any model used here must support structured outputs
+    (`response_format={"type": "json_schema", ...}`)."""
     last_error = None
     for attempt in range(2):
         try:
-            return _call_openai(client, passage_text, roster, preceding_line)
+            return _call_openai(client, passage_text, roster, preceding_line, model)
         except Exception as e:
             last_error = e
     raise AnnotationError(

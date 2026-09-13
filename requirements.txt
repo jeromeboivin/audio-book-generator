@@ -1,3 +1,9 @@
+# Prefer ./setup.sh or ./setup.ps1 over installing this file directly with a
+# bare `pip install -r requirements.txt`: qwen-tts transitively pulls in a
+# CUDA-linked torchaudio build (fails to import on a CPU-only machine with
+# "missing libcudart") unless torch/torchaudio are installed FIRST from
+# https://download.pytorch.org/whl/cpu (or the default index, if you
+# actually want the GPU build) — the setup scripts already do this for you.
 torch
 qwen-tts
 soundfile
