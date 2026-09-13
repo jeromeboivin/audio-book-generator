@@ -37,14 +37,24 @@ class Passage:
 
 
 class Chapter:
-    """`heading` is the `<h2>` text (e.g. "Chapitre I") and `title` is the
-    `<h3>` text (e.g. "Monsieur Myriel") — the two elements that together
-    define this Chapter's boundary (see `extract_chapter`). Both are real
-    narration content and must be narrated as such, not just consulted for
-    boundary detection and discarded — a real bug found in production: the
-    `<h2>` chapter-number heading was never making it into the narrated
-    output at all, only `title` was (see main.py's
-    `_build_narration_passages`)."""
+    """`heading` and `title` come from whichever of the two supported
+    chapter-detection conventions matched this Book (see `extract_chapter`):
+
+    - Gutenberg-style: `heading` is the `<h2>` text (e.g. "Chapitre I") and
+      `title` is the `<h3>` text (e.g. "Monsieur Myriel") — the two elements
+      that together define the chapter's boundary. Both are real narration
+      content and must be narrated as such, not just consulted for boundary
+      detection and discarded — a real bug found in production: the `<h2>`
+      chapter-number heading was never making it into the narrated output
+      at all, only `title` was (see main.py's `_build_narration_passages`).
+    - EPUB3-semantic-section (added 2026-09-13, e.g. L'Autre Moi): `heading`
+      is the text of the first heading element found inside the chapter's
+      `<section epub:type="chapter">` (often just a bare number, e.g. "1" —
+      narrated verbatim, never reformatted/invented), and `title` is the
+      text of a SECOND distinct heading inside that section if one exists,
+      else the empty string `""` (no subtitle is fabricated when the book
+      genuinely doesn't have one). main.py's `_build_narration_passages`
+      only builds a title Passage when `title` is non-empty."""
 
     def __init__(self, number: int, heading: str, title: str, passages: list[Passage]):
         self.number = number
@@ -89,8 +99,54 @@ def _iter_body_elements(soup: BeautifulSoup):
         yield el
 
 
-def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
+def _epub3_chapter_sections(book) -> list:
+    """Every `<section epub:type="chapter">` in the Book, in spine (reading)
+    order — collected by walking `book.spine` (not `get_items_of_type`'s own
+    iteration order, which isn't guaranteed to match spine order for every
+    book) and looking each item up via `book.get_item_with_id`, skipping
+    EpubNav items exactly like the Gutenberg-style path does below.
+
+    This is EPUB3's real semantic chapter marker (confirmed empirically
+    against L'Autre Moi - Franck Thilliez.epub: 68 chapters, each its own
+    `chapNN.xhtml` file, each wrapped in
+    `<section class="chap" epub:type="chapter" id="chap-NNN"
+    role="doc-chapter">`). Also confirmed empirically: BeautifulSoup's
+    `html.parser` does NOT namespace-process `epub:type` — it comes back as
+    a literal attribute key, so `section.get("epub:type") == "chapter"` is
+    the correct (and only necessary) check, no namespace-aware handling
+    needed."""
+    sections = []
+    for item_id, _linear in book.spine:
+        item = book.get_item_with_id(item_id)
+        if item is None or isinstance(item, epub.EpubNav):
+            continue
+        soup = BeautifulSoup(item.get_content(), "html.parser")
+        for section in soup.find_all("section"):
+            if section.get("epub:type") == "chapter":
+                sections.append(section)
+    return sections
+
+
+def _detect_structure(epub_path: str):
+    """Detects which of the two supported chapter-boundary conventions this
+    Book uses, returning `("semantic", sections)` or
+    `("gutenberg", (elements, boundaries))`. Shared by both
+    `extract_chapter` and `count_chapters` so the boundary-detection logic
+    lives in exactly one place, not duplicated between them.
+
+    Semantic-section detection (EPUB3's real `epub:type="chapter"` marker)
+    is tried first; if one or more such sections are found ANYWHERE in the
+    book, that's this Book's convention — no book is expected to mix both.
+    Otherwise this falls back EXACTLY to the original Gutenberg-style
+    `<h2>` + `<h3>` "Chapitre N" / title heading-pair detection, unchanged
+    from before this function existed — this must not alter behavior at all
+    for a book with no `epub:type="chapter"` sections (e.g. the Fantine
+    test book, or `tests/fixtures/synthetic_book.epub`)."""
     book = epub.read_epub(epub_path)
+
+    sections = _epub3_chapter_sections(book)
+    if sections:
+        return "semantic", sections
 
     elements = []
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
@@ -127,6 +183,61 @@ def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
         if nxt is not None and nxt.name == "h3":
             boundaries.append((i, heading_text, nxt.get_text().strip()))
 
+    return "gutenberg", (elements, boundaries)
+
+
+def count_chapters(epub_path: str) -> int:
+    """How many chapters `extract_chapter` will find in this Book, without
+    resorting to trial-and-error ValueError-catching — needed by main.py's
+    `--all-chapters` batch mode to know how many times to loop. Reuses
+    `_detect_structure` rather than duplicating either strategy's boundary-
+    detection logic."""
+    kind, data = _detect_structure(epub_path)
+    if kind == "semantic":
+        return len(data)
+    _, boundaries = data
+    return len(boundaries)
+
+
+def _extract_semantic_chapter(section, chapter_number: int) -> Chapter:
+    """Builds a Chapter from one `<section epub:type="chapter">` element.
+
+    `heading` is the text of the first heading element (h1-h6) found inside
+    the section — narrated verbatim, even when it's just a bare number
+    (e.g. "1", as in L'Autre Moi, which has no separate subtitle at all).
+    `title` is the text of a SECOND distinct heading inside the section if
+    one exists, else `""` — never fabricated. Passages are every `<p>` tag
+    found anywhere inside the section (recursively — some books nest their
+    paragraphs inside a wrapper div, e.g. L'Autre Moi's `<div class="dev">`),
+    given the exact same `.get_text()` + whitespace-normalize +
+    `_has_dialogue_line` treatment as the Gutenberg-style path."""
+    headings = section.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+    heading = _normalize(headings[0].get_text()) if headings else ""
+    title = _normalize(headings[1].get_text()) if len(headings) > 1 else ""
+
+    passages = []
+    for p in section.find_all("p"):
+        raw_text = p.get_text()
+        text = _normalize(raw_text)
+        if text:
+            passages.append(Passage(text=text, has_dialogue=_has_dialogue_line(raw_text)))
+
+    return Chapter(number=chapter_number, heading=heading, title=title, passages=passages)
+
+
+def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
+    kind, data = _detect_structure(epub_path)
+
+    if kind == "semantic":
+        sections = data
+        if chapter_number < 1 or chapter_number > len(sections):
+            raise ValueError(
+                f"chapter {chapter_number} not found; {len(sections)} chapter "
+                f"boundaries detected in {epub_path}"
+            )
+        return _extract_semantic_chapter(sections[chapter_number - 1], chapter_number)
+
+    elements, boundaries = data
     if chapter_number < 1 or chapter_number > len(boundaries):
         raise ValueError(
             f"chapter {chapter_number} not found; {len(boundaries)} chapter "

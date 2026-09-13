@@ -11,3 +11,4 @@ numpy
 ebooklib
 beautifulsoup4
 openai
+tqdm

@@ -9,9 +9,11 @@ gender, and the tone to speak it with).
 
 ```
 EPUB
-  │  ebooklib + BeautifulSoup — chapter-boundary detection, whitespace normalization
+  │  ebooklib + BeautifulSoup — chapter-boundary detection (two supported
+  │  conventions, see "Chapter-boundary detection" below), whitespace normalization
   ▼
-Chapter (title + ordered Passages, one per source paragraph or non-title heading)
+Chapter (heading + optional title + ordered Passages, one per source paragraph or
+  │  non-title heading)
   │  em-dash-prefixed lines flagged as dialogue-bearing (checked before whitespace
   │  collapse, so dialogue that opens on a wrapped source line isn't missed)
   ▼
@@ -52,6 +54,8 @@ Passage, Line, Voice, Cast, Chunk, ...).
   [flash-attention](https://github.com/Dao-AILab/flash-attention) enabled automatically
   if that package is installed — this path is implemented per Qwen3-TTS's own docs but
   hasn't been exercised on real GPU hardware yet
+- [`tqdm`](https://github.com/tqdm/tqdm) for CLI progress bars (installed via
+  `requirements.txt` like everything else — no separate setup step)
 
 ## Quickstart
 
@@ -93,7 +97,8 @@ python src/audiobook/main.py --book /path/to/your-book.epub --chapter 1 --worker
 | Flag | Default | Meaning |
 |---|---|---|
 | `--book PATH` | *(required)* | EPUB to narrate |
-| `--chapter N` | `1` | Chapter number to synthesize (1-indexed) |
+| `--chapter N` | `1` | Chapter number to synthesize (1-indexed). Mutually exclusive with `--all-chapters` |
+| `--all-chapters` | off | Process every chapter in the book, in order (1..N — see "Chapter-boundary detection" below for how N is determined). Mutually exclusive with `--chapter` |
 | `--workers N` | `2` | Parallel TTS worker processes |
 | `--skip-tts` | off | Parse + annotate only, no synthesis (useful to sanity-check annotation cost/output before committing to a full run) |
 | `--openai-model NAME` | `gpt-5.6-luna` (or `$OPENAI_MODEL` if set) | Model used for the Annotation Pass — must support structured outputs (`response_format={"type": "json_schema", ...}`) |
@@ -107,6 +112,37 @@ invalidates the passages affected (and everything sequentially after them in tha
 chapter, since character-roster tracking depends on processing order); already-cached
 chunk audio is skipped independently, since it's addressed by content hash rather than
 passage position.
+
+Progress bars (via `tqdm`) show passage-annotation progress within the current chapter,
+chunk-synthesis progress within the current chapter, and (with `--all-chapters`) overall
+chapter progress across the book; the same detailed per-passage/per-chunk status lines
+print alongside the bars as before, just routed through `tqdm.write` so they don't
+garble the bar's redraw.
+
+### Whole-book batch mode (`--all-chapters`)
+
+```bash
+python src/audiobook/main.py --book /path/to/your-book.epub --all-chapters --workers 2
+```
+
+Loops chapters 1..N (N from `parsing.count_chapters`), calling the same per-chapter
+pipeline as `--chapter` for each — this is purely an outer loop around the existing
+single-chapter `run()`, so every existing per-Passage/per-Chunk resumability guarantee
+still applies within each chapter. Two behaviors are specific to `--all-chapters`:
+
+- **Chapter-level resumability**: a chapter is skipped ENTIRELY (no annotation, no
+  synthesis, just a log line) if its output WAV already exists in `output/`. Combined
+  with the existing per-Passage/per-Chunk resumability, this means a whole-book run can
+  be interrupted and resumed at any point — already-finished chapters aren't touched at
+  all, a partially-finished chapter picks up from its last checkpointed Passage/Chunk.
+- **Stop on first failure**: the batch aborts immediately on the first chapter that
+  raises (an Annotation Pass or synthesis failure, say) rather than silently skipping it
+  and moving on — consistent with this project's "abort loudly, resumability makes it
+  safe to just rerun" philosophy. The error message names which chapter failed; simply
+  re-running the exact same `--all-chapters` command resumes from there (already-done
+  chapters are skipped via the output-file check above; already-annotated Passages and
+  already-synthesized Chunks within the chapter that failed are skipped via the existing
+  checkpoint/content-hash caches).
 
 ### Overriding voice casting
 
@@ -156,13 +192,45 @@ includes overriding "Narrator" itself, if you want).
 ## Scope and limitations
 
 - **French only**, EPUB input only (no raw text, no other languages)
-- **One chapter at a time** — no whole-book batch mode yet
 - **Voice cloning is out of scope** — only Qwen3-TTS's built-in preset voices are used,
   none of which are natively French (cross-lingual synthesis)
-- Chapter-boundary detection assumes a Gutenberg-style `<h2>`+`<h3>` "Chapitre N" /
-  title heading pair — a different EPUB's structure (a different heading pattern, or
-  chapters already split one-per-file) would need new parsing logic before this
-  pipeline could handle it
 - Synthesis batching is per-chunk (consecutive narrator lines merged, one call each;
   each dialogue line always its own call) — batching multiple *dialogue* lines from the
   same speaker together was deliberately deferred, for simplicity
+- **Guillemets (« ») are never treated as a dialogue-turn marker** — only a leading
+  em-dash (—) triggers the Annotation Pass (`has_dialogue`/`_has_dialogue_line` in
+  `parsing.py`). This is a deliberate, accepted limitation, not an oversight: investigated
+  directly against a real book (L'Autre Moi) where guillemets appear in most chapters,
+  they're overwhelmingly used as scare-quotes around a single term (e.g. `«Longepin»`) or
+  short quoted written notes (e.g. `«Te voilà au courant de tout.»`), not to open a
+  spoken dialogue turn the way em-dash is used in that same book. Extending detection to
+  guillemets would likely cause many false-positive OpenAI calls on pure narration that
+  merely quotes a term, without reliably catching genuinely missed dialogue — the
+  evidence doesn't support guillemets marking dialogue turns in this kind of book. A
+  chapter with dialogue conventions this pipeline doesn't recognize may occasionally
+  narrate a dialogue line in the Narrator's voice instead of a character's — an accepted
+  imprecision for a personal tool, same spirit as the occasional speaker misattribution
+  already accepted elsewhere in this codebase.
+
+### Chapter-boundary detection
+
+Two conventions are supported (tried in this order, `parsing.extract_chapter` /
+`parsing.count_chapters`):
+
+1. **EPUB3 semantic section** (tried first): any `<section epub:type="chapter">`
+   found anywhere in the book, walked in spine order. If one or more are found, that's
+   this book's convention — the Nth such section is chapter N. Within a section,
+   `heading` is the text of the first heading element (`h1`-`h6`) found inside it —
+   narrated verbatim even when it's just a bare number (e.g. "1", as in L'Autre Moi,
+   which has no separate subtitle at all) — and `title` is a second, distinct heading if
+   one exists, else `""` (never fabricated; an empty title produces no title Passage).
+   Passages are every `<p>` found anywhere inside the section (recursively, so a
+   paragraph nested inside a wrapper `<div>` is still found). A book can exclude a
+   section from the count entirely just by giving it a different `epub:type` (e.g.
+   L'Autre Moi's Préface is `epub:type="preface"` — correctly not counted as a chapter).
+2. **Gutenberg-style** (fallback, used only when no `epub:type="chapter"` sections exist
+   anywhere in the book): an `<h2>` matching `"Chapitre \w+"` immediately followed by an
+   `<h3>` (the title) — the original convention this pipeline was built against. A
+   different EPUB's structure (a different heading pattern, chapters already split
+   one-per-file without EPUB3 semantic markup, etc.) matching neither convention would
+   need new parsing logic before this pipeline could handle it.

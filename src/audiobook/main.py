@@ -4,9 +4,11 @@ import re
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from tqdm import tqdm
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from audiobook import annotation, assembly, chunking, synthesis
+from audiobook import annotation, assembly, chunking, parsing, synthesis
 from audiobook.cast import Cast, load_voice_config
 from audiobook.checkpoint import Checkpoint, hash_passage
 from audiobook.chunking import AnnotatedLine
@@ -37,21 +39,30 @@ def _book_slug(book_path: str) -> str:
 
 def _build_narration_passages(chapter) -> list[Passage]:
     """The full list of things to narrate for a Chapter: its own heading
-    (e.g. "Chapitre I") first, then its title (e.g. "Monsieur Myriel"),
-    then its body Passages (indices shifted by two from
-    parsing.extract_chapter's own indexing).
+    (e.g. "Chapitre I", or just "1" for an EPUB3-semantic-section book)
+    first, then its title (e.g. "Monsieur Myriel") IF it has one, then its
+    body Passages.
 
     Both heading and title are real narration content, not just boundary
     markers to be discarded — a real bug found in production: `heading`
     (the <h2> "Chapitre N" text) was never narrated at all, only `title`
-    (the <h3>) was. Both Passages' `has_dialogue` is hard-set False, not
+    (the <h3>) was. Their Passages' `has_dialogue` is hard-set False, not
     computed — neither is ever dialogue, and both must always
     short-circuit straight to a Narrator Line via
     `annotation.short_circuit_narrator`, never sent to OpenAI and never
-    subject to the has_dialogue/em-dash check at all."""
-    heading_passage = Passage(text=chapter.heading, has_dialogue=False)
-    title_passage = Passage(text=chapter.title, has_dialogue=False)
-    return [heading_passage, title_passage] + chapter.passages
+    subject to the has_dialogue/em-dash check at all.
+
+    `chapter.title` is `""` for a book whose semantic-section chapters have
+    no separate subtitle at all (e.g. L'Autre Moi — see
+    `parsing._extract_semantic_chapter`) — an empty title must NOT produce
+    an empty/pointless Narrator Passage, so the title Passage is only built
+    when `chapter.title` is non-empty. The heading Passage is always built
+    (it's never empty for a valid Chapter)."""
+    passages = [Passage(text=chapter.heading, has_dialogue=False)]
+    if chapter.title:
+        passages.append(Passage(text=chapter.title, has_dialogue=False))
+    passages.extend(chapter.passages)
+    return passages
 
 
 NARRATOR_TONE_SAMPLE_PASSAGES = 5
@@ -152,12 +163,17 @@ def _phase1_annotate_and_assign_voices(
     # it's correct even when resuming mid-chapter.
     prev_line_text = None
 
-    for idx, passage in enumerate(passages):
+    for idx, passage in tqdm(
+        list(enumerate(passages)),
+        total=n_passages,
+        desc=f"Chapter {chapter_number}: annotating passages",
+        unit="passage",
+    ):
         passage_text = passage.text
         h = hash_passage(passage_text)
 
         if checkpoint.is_passage_annotated(chapter_number, idx, h):
-            print(f"Passage {idx + 1}/{n_passages}: already annotated, skipping")
+            tqdm.write(f"Passage {idx + 1}/{n_passages}: already annotated, skipping")
             entry = checkpoint.get_entry(chapter_number, idx)
             roster = list(entry.get("roster", roster))
             for line in entry["annotation"]["lines"]:
@@ -168,7 +184,7 @@ def _phase1_annotate_and_assign_voices(
         if passage.has_dialogue:
             if client is None:
                 client = annotation.make_client()
-            print(f"Passage {idx + 1}/{n_passages}: annotating via OpenAI ({openai_model}) ...")
+            tqdm.write(f"Passage {idx + 1}/{n_passages}: annotating via OpenAI ({openai_model}) ...")
             result = annotation.annotate_passage(client, passage_text, roster, prev_line_text, model=openai_model)
         else:
             result = annotation.short_circuit_narrator(passage_text)
@@ -178,7 +194,7 @@ def _phase1_annotate_and_assign_voices(
             all_lines.append(_resolve_line(line, cast, narrator_instruct))
 
         checkpoint.set_entry(chapter_number, idx, h, result, list(roster))
-        print(f"Passage {idx + 1}/{n_passages}: annotated ({len(result['lines'])} lines)")
+        tqdm.write(f"Passage {idx + 1}/{n_passages}: annotated ({len(result['lines'])} lines)")
         prev_line_text = result["lines"][-1]["text"]
 
     return all_lines
@@ -220,12 +236,12 @@ def _phase2_synthesize_chunks(chapter_number, chunks, workers):
 
     total_chunks = len(chunks)
     if not jobs:
-        print(f"No audio synthesis needed (all {total_chunks} chunk(s) already cached).")
+        tqdm.write(f"No audio synthesis needed (all {total_chunks} chunk(s) already cached).")
         return
 
     total_jobs = len(jobs)
     threads_per_worker = synthesis.default_threads_per_worker(workers)
-    print(
+    tqdm.write(
         f"Starting {workers} worker process(es) (each loading its own Qwen3-TTS model copy, "
         f"{threads_per_worker} torch thread(s) each) for {total_jobs}/{total_chunks} chunk(s) "
         f"needing synthesis ..."
@@ -239,7 +255,12 @@ def _phase2_synthesize_chunks(chapter_number, chunks, workers):
     ) as executor:
         futures = {executor.submit(synthesis.run_job, job): job for job in jobs}
         try:
-            for future in as_completed(futures):
+            for future in tqdm(
+                as_completed(futures),
+                total=total_jobs,
+                desc=f"Chapter {chapter_number}: synthesizing chunks",
+                unit="chunk",
+            ):
                 job = futures[future]
                 try:
                     future.result()
@@ -251,7 +272,7 @@ def _phase2_synthesize_chunks(chapter_number, chunks, workers):
                     ) from e
 
                 completed += 1
-                print(f"Chunk {job.chunk_index + 1}/{total_chunks} synthesized ({completed}/{total_jobs}) -> {job.audio_path}")
+                tqdm.write(f"Chunk {job.chunk_index + 1}/{total_chunks} synthesized ({completed}/{total_jobs}) -> {job.audio_path}")
         except Exception:
             # Let already-running jobs finish (can't preempt a running
             # process), but don't start any more that were merely queued.
@@ -279,27 +300,27 @@ def run(
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     checkpoint = Checkpoint(os.path.join(CHECKPOINT_DIR, f"{book_slug}.checkpoint.json"))
 
-    print(f"Parsing {book_path} ...")
+    tqdm.write(f"Parsing {book_path} ...")
     chapter = extract_chapter(book_path, chapter_number)
     # Passage 0 is always the chapter's own title, narrated first (Narrator
     # voice, no Annotation Pass call); passages 1..N are the chapter's body
     # Passages, shifted by one from parsing.extract_chapter's own indexing.
     passages = _build_narration_passages(chapter)
     n_passages = len(passages)
-    print(f"Chapter {chapter_number}: '{chapter.title}', {n_passages} passages (incl. title)")
+    tqdm.write(f"Chapter {chapter_number}: '{chapter.title}', {n_passages} passages (incl. title)")
 
     narrator_instruct = None
     if narrator_tone:
         narrator_instruct = checkpoint.get_narrator_instruct(chapter_number)
         if narrator_instruct is not None:
-            print(f"--narrator-tone: reusing cached tone for this Chapter: {narrator_instruct!r}")
+            tqdm.write(f"--narrator-tone: reusing cached tone for this Chapter: {narrator_instruct!r}")
         else:
-            print("--narrator-tone: guessing this Chapter's overall narrative tone via OpenAI ...")
+            tqdm.write("--narrator-tone: guessing this Chapter's overall narrative tone via OpenAI ...")
             sample = _narrator_tone_sample(chapter)
             client = annotation.make_client()
             narrator_instruct = annotation.guess_narrator_tone(client, sample, model=openai_model)
             checkpoint.set_narrator_instruct(chapter_number, narrator_instruct)
-            print(f"--narrator-tone: guessed and cached: {narrator_instruct!r}")
+            tqdm.write(f"--narrator-tone: guessed and cached: {narrator_instruct!r}")
 
     first_pending = None
     for idx, passage in enumerate(passages):
@@ -321,11 +342,11 @@ def run(
 
     roster = _reconstruct_state(checkpoint, chapter_number, n_passages, first_pending)
     if first_pending is None:
-        print("All passages already annotated — nothing to (re-)annotate.")
+        tqdm.write("All passages already annotated — nothing to (re-)annotate.")
     elif first_pending == 0:
-        print("Starting fresh (no prior checkpoint progress).")
+        tqdm.write("Starting fresh (no prior checkpoint progress).")
     else:
-        print(f"Resuming from passage {first_pending + 1}/{n_passages} (roster so far: {roster})")
+        tqdm.write(f"Resuming from passage {first_pending + 1}/{n_passages} (roster so far: {roster})")
 
     # Phase 1 (sequential): annotate + assign Voices for every passage, and
     # accumulate the Chapter's full ordered Line list.
@@ -334,7 +355,7 @@ def run(
     )
 
     if skip_tts:
-        print("skip_tts=True: not building chunks or assembling the final chapter WAV.")
+        tqdm.write("skip_tts=True: not building chunks or assembling the final chapter WAV.")
         return None
 
     # Chunk-building: a pure, deterministic function of the Chapter's full
@@ -342,22 +363,114 @@ def run(
     # Lines (even across Passage/heading boundaries) into single Chunks,
     # breaking only at real dialogue Lines.
     chunks = chunking.build_chunks(all_lines, os.path.join(AUDIO_CACHE_DIR, book_slug), chapter_number)
-    print(f"Built {len(chunks)} chunk(s) from {len(all_lines)} line(s).")
+    tqdm.write(f"Built {len(chunks)} chunk(s) from {len(all_lines)} line(s).")
 
     # Phase 2 (parallel): synthesize every Chunk whose audio isn't already
     # cached, across worker processes.
     _phase2_synthesize_chunks(chapter_number, chunks, workers)
 
-    print("Assembling chapter WAV from chunk audio ...")
+    tqdm.write("Assembling chapter WAV from chunk audio ...")
     out_path = assembly.assemble_chapter([c.audio_path for c in chunks], chapter_number, chapter.title, OUTPUT_DIR)
-    print(f"Wrote {out_path}")
+    tqdm.write(f"Wrote {out_path}")
     return out_path
+
+
+def run_all_chapters(
+    book_path: str,
+    skip_tts: bool = False,
+    workers: int = DEFAULT_WORKERS,
+    openai_model: str = annotation.DEFAULT_MODEL,
+    narrator_tone: bool = True,
+):
+    """Whole-book batch mode (`--all-chapters`): loops chapters 1..N,
+    calling `run()` unchanged for each — this function is purely an outer
+    loop, all per-chapter logic (annotation/chunking/synthesis/assembly,
+    and their own resumability) stays entirely inside `run()`.
+
+    Chapter-level resumability: a chapter is skipped ENTIRELY (no
+    annotation, no synthesis work, just a log line) if its output WAV
+    already exists in `OUTPUT_DIR` — computed via `assembly.chapter_filename`
+    (shared with `assembly.assemble_chapter` itself, not re-derived here)
+    from the chapter's number and title. This needs the chapter's title
+    ahead of running it, so this function parses the chapter (cheap — no
+    OpenAI/TTS calls) once for the pre-check; `run()` then parses it again
+    itself when it actually runs — a deliberate, accepted duplication
+    rather than changing `run()`'s own signature/logic to accept a
+    pre-parsed Chapter, per this feature's "reuse run() completely
+    unchanged" requirement.
+
+    Stops the whole batch on the first chapter that raises — consistent
+    with this project's "abort loudly, resumability makes it safe to just
+    rerun" philosophy (see e.g. `_phase2_synthesize_chunks`'s matching
+    comment): a failed chapter is never silently skipped so the batch can
+    continue, since that would risk an unnoticed gap in the finished
+    audiobook. The exception is re-raised after printing which chapter
+    failed and how re-running the same command resumes, so main() still
+    exits non-zero exactly like a single-chapter run's uncaught error
+    would."""
+    total = parsing.count_chapters(book_path)
+    tqdm.write(f"--all-chapters: {total} chapter(s) detected in {book_path}")
+
+    completed = 0
+    skipped = 0
+    outer = tqdm(range(1, total + 1), desc="Book: chapters", unit="chapter")
+    try:
+        for chapter_number in outer:
+            outer.set_description(f"Book: chapter {chapter_number}/{total}")
+
+            chapter = extract_chapter(book_path, chapter_number)
+            out_path = os.path.join(OUTPUT_DIR, assembly.chapter_filename(chapter_number, chapter.title))
+            if os.path.exists(out_path):
+                tqdm.write(f"Chapter {chapter_number}/{total}: output already exists ({out_path}) — skipping entirely.")
+                skipped += 1
+                continue
+
+            try:
+                run(
+                    book_path,
+                    chapter_number,
+                    skip_tts=skip_tts,
+                    workers=workers,
+                    openai_model=openai_model,
+                    narrator_tone=narrator_tone,
+                )
+            except Exception as e:
+                tqdm.write(f"\n--all-chapters: chapter {chapter_number}/{total} FAILED: {e}")
+                tqdm.write(
+                    f"Progress so far: {completed} completed, {skipped} skipped (already done), "
+                    f"{total} total — re-running the same --all-chapters command will skip "
+                    "everything already done (already-assembled chapters via the output-file "
+                    "check, already-annotated passages and already-synthesized chunks within "
+                    "this chapter via the existing checkpoint/content-hash caches) and resume "
+                    "from here."
+                )
+                raise
+
+            completed += 1
+    finally:
+        outer.close()
+
+    print(
+        f"\n--all-chapters summary: {completed} chapter(s) completed, {skipped} skipped "
+        f"(already done), {total} total."
+    )
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--book", required=True, help="path to the EPUB file to narrate")
-    parser.add_argument("--chapter", type=int, default=1)
+    chapter_group = parser.add_mutually_exclusive_group()
+    chapter_group.add_argument(
+        "--chapter", type=int, default=1, help="chapter number to synthesize (1-indexed, default 1)"
+    )
+    chapter_group.add_argument(
+        "--all-chapters",
+        action="store_true",
+        help="process every chapter in the book, in order (1..N, via parsing.count_chapters) — "
+        "resumable at the chapter level: a chapter whose output WAV already exists in the output "
+        "directory is skipped entirely, and the batch stops on the first chapter that raises "
+        "(rerun the same command to resume). Mutually exclusive with --chapter.",
+    )
     parser.add_argument("--skip-tts", action="store_true", help="parse+annotate only, no synthesis")
     parser.add_argument(
         "--workers",
@@ -383,14 +496,23 @@ def main():
     args = parser.parse_args()
     if args.workers < 1:
         parser.error("--workers must be >= 1")
-    run(
-        args.book,
-        args.chapter,
-        skip_tts=args.skip_tts,
-        workers=args.workers,
-        openai_model=args.openai_model,
-        narrator_tone=args.narrator_tone,
-    )
+    if args.all_chapters:
+        run_all_chapters(
+            args.book,
+            skip_tts=args.skip_tts,
+            workers=args.workers,
+            openai_model=args.openai_model,
+            narrator_tone=args.narrator_tone,
+        )
+    else:
+        run(
+            args.book,
+            args.chapter,
+            skip_tts=args.skip_tts,
+            workers=args.workers,
+            openai_model=args.openai_model,
+            narrator_tone=args.narrator_tone,
+        )
 
 
 if __name__ == "__main__":

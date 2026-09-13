@@ -17,7 +17,14 @@ today.
   considered early on but was never built — EPUB is the only supported
   format).
 - **Chapter**: a top-level division of a Book. The unit of output: one audio
-  file is produced per Chapter.
+  file is produced per Chapter. Detected via one of two supported
+  conventions *(second one added 2026-09-13)*: a Gutenberg-style `<h2>`
+  "Chapitre N" + `<h3>` title heading pair, or an EPUB3-semantic
+  `<section epub:type="chapter">` (tried first; whichever the Book
+  actually uses is auto-detected, see `parsing.extract_chapter`/
+  `parsing.count_chapters`) — a semantic-section Chapter's `title` may be
+  `""` when the Book has no separate subtitle at all (e.g. L'Autre Moi -
+  Franck Thilliez, whose chapters carry only a bare-number heading).
 - **Passage**: one paragraph of a Chapter's text — the unit sent to OpenAI in
   a single annotation call. A Passage may be pure narration, pure dialogue,
   or a mix (e.g. a line of dialogue with an attribution tag like "said Marie").
