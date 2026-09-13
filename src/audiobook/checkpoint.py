@@ -77,13 +77,13 @@ class Checkpoint:
         self.save()
 
     def get_narrator_instruct(self, chapter_number: int) -> str | None:
-        """The experimental, opt-in (see main.py's --narrator-tone flag)
-        chapter-wide Narrator `instruct` string, if one has already been
-        guessed and persisted for this Chapter. Persisted (not just
-        computed fresh every run) so a resumed run reuses the exact same
-        tone rather than risking a different guess from a second OpenAI
-        call — every Narrator Chunk in the Chapter must share one
-        consistent instruct, not drift between runs."""
+        """The chapter-wide Narrator `instruct` string (see main.py's
+        `--narrator-tone`/`--no-narrator-tone` flag, on by default), if one
+        has already been guessed and persisted for this Chapter. Persisted
+        (not just computed fresh every run) so a resumed run reuses the
+        exact same tone rather than risking a different guess from a
+        second OpenAI call — every Narrator Chunk in the Chapter must
+        share one consistent instruct, not drift between runs."""
         return self.data.get("narrator_instruct", {}).get(str(chapter_number))
 
     def set_narrator_instruct(self, chapter_number: int, instruct: str) -> None:

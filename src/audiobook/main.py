@@ -101,11 +101,9 @@ def _resolve_line(line: dict, cast: Cast, narrator_instruct: str | None = None) 
     lines against the same single `Cast` instance used for the whole run
     is always correct and deterministic.
 
-    `narrator_instruct`: None by default (Narrator Lines carry no
-    `instruct`, as always) — but when main.py's experimental
-    `--narrator-tone` flag is on, this is the SAME chapter-wide instruct
-    string for every Narrator Line in the Chapter (see
-    `annotation.guess_narrator_tone`), applied here uniformly. Ignored for
+    `narrator_instruct`: the chapter-wide instruct string every Narrator
+    Line gets (see `annotation.guess_narrator_tone`), or None if
+    `--no-narrator-tone` disabled the feature for this run. Ignored for
     non-Narrator Lines, which always use their own per-Line `instruct`."""
     voice = cast.voice_for(line["speaker"], line["speaker_gender"], line["speaker_is_child"], is_narrator=line["is_narrator"])
     role = cast.role_for(line["speaker_gender"], line["speaker_is_child"], is_narrator=line["is_narrator"])
@@ -267,7 +265,7 @@ def run(
     skip_tts: bool = False,
     workers: int = DEFAULT_WORKERS,
     openai_model: str = annotation.DEFAULT_MODEL,
-    narrator_tone: bool = False,
+    narrator_tone: bool = True,
 ):
     overrides = Cast.load_overrides(CAST_JSON_PATH)
     voice_config = load_voice_config(VOICES_JSON_PATH)
@@ -375,11 +373,12 @@ def main():
     )
     parser.add_argument(
         "--narrator-tone",
-        action="store_true",
-        help="(experimental, off by default) guess this Chapter's overall narrative tone "
-        "from its opening (one extra OpenAI call) and apply it as a single, chapter-wide "
-        "instruct string to every Narrator Chunk, instead of Narrator Lines carrying no "
-        "instruct at all",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="guess this Chapter's overall narrative tone from its opening (one extra "
+        "OpenAI call, cached per Chapter) and apply it as a single, chapter-wide instruct "
+        "string to every Narrator Chunk. On by default; pass --no-narrator-tone to go back "
+        "to Narrator Lines carrying no instruct at all",
     )
     args = parser.parse_args()
     if args.workers < 1:

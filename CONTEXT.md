@@ -29,9 +29,14 @@ today.
   narration/dialogue splitting. A Narrator Line is passed straight to
   synthesis unchanged. A dialogue Line (any non-Narrator Speaker) carries a
   generated Instruct String.
-- **Instruct String**: the natural-language tone/emotion directive OpenAI
-  generates for a dialogue Line (e.g. "speak with hesitant relief"), passed
-  to the TTS engine alongside the Line's text. Narrator Lines never have one.
+- **Instruct String**: the natural-language performance directive passed to
+  the TTS engine alongside a Line's text — for a dialogue Line, OpenAI
+  generates one per Line covering emotion, pace, volume, and delivery
+  quality (e.g. "Speak with quiet dread."); a Narrator Line gets the SAME
+  chapter-wide Instruct String as every other Narrator Line in that
+  Chapter (see main.py's `--narrator-tone`/`--no-narrator-tone` flag, on
+  by default), guessed once from the Chapter's opening — or none at all
+  if that flag is disabled.
 - **Voice**: a concrete TTS-engine voice (one of its Preset Voices) that can
   be assigned to a Speaker.
 - **Cast** *(redesigned 2026-09-13)*: a stateless, pure lookup from a Line's **role** — one of

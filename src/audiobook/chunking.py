@@ -165,11 +165,11 @@ def build_chunks(lines: list[AnnotatedLine], audio_cache_dir: str, chapter_numbe
     All Narrator Lines share the fixed Narrator voice, so the buffered
     Chunk's `voice` is simply whatever the buffered Lines' (constant)
     voice is; a dialogue Chunk's voice/instruct are exactly its one Line's.
-    Narrator Lines normally carry `instruct=None` (see ticket 01/CONTEXT.md
-    — no tone parameter by default), but main.py's experimental
-    `--narrator-tone` flag can give every Narrator Line in a Chapter the
-    SAME chapter-wide instruct string; when it does, every buffered Line
-    shares that same value too (by construction), so tracking it exactly
+    Narrator Lines get a chapter-wide `instruct` string too by default (see
+    main.py's `--narrator-tone` flag, on unless `--no-narrator-tone` is
+    passed) — every Narrator Line in a Chapter shares the SAME value, so
+    every buffered Line shares that same value too (by construction),
+    tracking it exactly
     like `buffer_voice` is correct.
     """
     chunks: list[Chunk] = []

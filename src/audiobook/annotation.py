@@ -246,19 +246,20 @@ specific emotion — that's decided separately, per dialogue Line, elsewhere. Ke
 
 
 def guess_narrator_tone(client: OpenAI, sample_text: str, model: str = DEFAULT_MODEL) -> str:
-    """Experimental (see main.py's --narrator-tone flag, off by default):
-    one extra OpenAI call, made once per Chapter — not per Passage/Line —
-    that asks the model to guess the Chapter's overall narrative tone from
-    a small, fixed sample of its opening (heading/title + first few
+    """One extra OpenAI call, made once per Chapter — not per Passage/Line
+    — that asks the model to guess the Chapter's overall narrative tone
+    from a small, fixed sample of its opening (heading/title + first few
     Passages) and produce a single short `instruct` string. That one
     string is then applied to EVERY Narrator Chunk in the Chapter (see
     main.py's `_resolve_line`), for consistency — a Chapter's narration
-    shouldn't randomly shift register from one Chunk to the next.
+    shouldn't randomly shift register from one Chunk to the next. On by
+    default (see main.py's `--narrator-tone`/`--no-narrator-tone` flag) —
+    validated by ear against the sample book and judged an improvement
+    over no instruct at all.
 
     Retried once then raises, same "fail loudly, no silent fallback"
-    policy as `annotate_passage` — an experimental feature failing
-    silently into "no tone" would be a worse surprise than the run just
-    stopping."""
+    policy as `annotate_passage` — silently degrading to "no tone" would
+    be a worse surprise than the run just stopping."""
     last_error = None
     for attempt in range(2):
         try:

@@ -27,7 +27,7 @@ Chunks (consecutive Narrator Lines merged across Passages into one call each;
   │  each dialogue Line is its own Chunk) — content-hash-addressed audio caching
   ▼
 TTS synthesis (Qwen3-TTS), one call per Chunk
-  │  Narrator Chunks  → 0.6B-CustomVoice, no tone parameter
+  │  Narrator Chunks  → 0.6B-CustomVoice, one chapter-wide tone (guessed once, cached)
   │  Dialogue Chunks  → 1.7B-CustomVoice, rich OpenAI-generated instruct string
   │  GPU auto-detected (CUDA + best-effort flash-attention); CPU float32 fallback
   ▼
@@ -97,7 +97,7 @@ python src/audiobook/main.py --book /path/to/your-book.epub --chapter 1 --worker
 | `--workers N` | `2` | Parallel TTS worker processes |
 | `--skip-tts` | off | Parse + annotate only, no synthesis (useful to sanity-check annotation cost/output before committing to a full run) |
 | `--openai-model NAME` | `gpt-5.6-luna` (or `$OPENAI_MODEL` if set) | Model used for the Annotation Pass — must support structured outputs (`response_format={"type": "json_schema", ...}`) |
-| `--narrator-tone` | off | *(experimental)* Guess the Chapter's overall narrative tone from its opening (one extra OpenAI call, cached per Chapter) and give every Narrator Chunk that same instruct string, instead of none at all |
+| `--narrator-tone` / `--no-narrator-tone` | on | Guess the Chapter's overall narrative tone from its opening (one extra OpenAI call, cached per Chapter) and give every Narrator Chunk that same instruct string; `--no-narrator-tone` goes back to Narrator Chunks carrying no instruct at all |
 
 Output lands in `output/`; per-chunk audio is cached in `audio_cache/` (content-hash
 addressed — a chunk is a run of merged consecutive Narrator lines, or one dialogue line);

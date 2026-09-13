@@ -30,9 +30,11 @@ class _FakeChapter:
         self.passages = passages
 
 
-def test_default_behavior_unchanged_no_narrator_instruct():
-    """Without opting in, _resolve_line must behave exactly as before:
-    Narrator Lines get instruct=None, dialogue Lines keep their own."""
+def test_no_narrator_instruct_means_none_not_a_default_string():
+    """When narrator_instruct is None (--no-narrator-tone, or the Chapter's
+    tone hasn't been guessed yet), _resolve_line must not silently
+    substitute anything — Narrator Lines get instruct=None, exactly like
+    before this feature existed."""
     narrator_line = {
         "speaker": "Narrator",
         "is_narrator": True,
