@@ -157,4 +157,20 @@ narrated as an ordinary trailing Passage. This doesn't change this map's
 Chapter-1-only destination, but confirms the fix targets a real defect in
 this same EPUB, not a hypothetical one.
 
+**Amendment (2026-09-13, same day) — exclude the EPUB3 nav document**:
+found while building a synthetic 2-chapter test fixture
+(`tests/fixtures/synthetic_book.epub`) to validate a full end-to-end run
+without using either real book. `ebooklib`'s auto-generated `EpubNav`
+(table-of-contents) document reports the same item type
+(`ebooklib.ITEM_DOCUMENT`) as real content — `get_items_of_type` cannot
+tell them apart — so once the amendment above stopped skipping non-`<p>`
+elements, the nav document's own `<nav><h2>book title</h2>...</nav>`
+heading started leaking into whichever chapter's Passage slice runs
+unbounded to the end of `elements` (the last chapter in the book, which
+has no following chapter boundary to stop at). Not a problem in the real
+test EPUB only because that book's structure happens not to trigger it —
+a latent risk there too. Fixed: `extract_chapter` now skips any
+`isinstance(item, epub.EpubNav)` item outright before collecting
+elements from it. Covered by `tests/test_parsing_nav_exclusion.py`.
+
 Status: resolved

@@ -84,6 +84,19 @@ def extract_chapter(epub_path: str, chapter_number: int) -> Chapter:
 
     elements = []
     for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+        # ebooklib's auto-generated EpubNav (the EPUB3 table-of-contents
+        # document) reports the same item type (ITEM_DOCUMENT) as real
+        # content — get_items_of_type can't tell them apart. It must still
+        # be excluded here: its <nav><h2>book title</h2>...</nav> structure
+        # is never narration, and since the h1-h6 broadening above (ticket
+        # 04's amendment) no longer skips non-<p> elements, a nav document's
+        # heading would otherwise silently leak into whichever chapter's
+        # slice runs unbounded to the end of `elements` (typically the last
+        # chapter in the book) — found via a synthetic test fixture, not
+        # present in the real test EPUB only because that book's structure
+        # happens not to trigger it.
+        if isinstance(item, epub.EpubNav):
+            continue
         soup = BeautifulSoup(item.get_content(), "html.parser")
         elements.extend(_iter_body_elements(soup))
 
